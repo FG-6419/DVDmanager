@@ -11,7 +11,7 @@ use discslim::engine::batch::{AutoSettings, BatchItem, PlanSource, Status};
 use discslim::engine::plan::fmt_size;
 use discslim::engine::project::Project;
 
-use super::dialogs::{dirs_home, modal, progress_bar, sanitize, show_in_explorer, with_ext};
+use super::dialogs::{modal, progress_bar, sanitize, show_in_explorer, with_ext};
 use super::style::{self, primary_button, segmented, semibold, soft_button};
 use super::{target_sectors, App, OutputKind, TargetKind};
 
@@ -19,7 +19,7 @@ impl App {
     /// Zielordner für neu hinzugefügte DVDs.
     fn batch_dir(&self) -> PathBuf {
         if self.prefs.batch_dir.trim().is_empty() {
-            dirs_home().join("Videos")
+            self.save_start_dir()
         } else {
             PathBuf::from(self.prefs.batch_dir.trim())
         }
@@ -256,7 +256,9 @@ impl App {
                     .margin(Margin::symmetric(10, 6));
                 ui.add(edit);
                 if soft_button(ui, &p, &format!("{}  Wählen", ic::FOLDER_OPEN)).clicked() {
-                    if let Some(f) = rfd::FileDialog::new().set_title("Zielordner für die Warteschlange").pick_folder() {
+                    let start = Some(PathBuf::from(self.prefs.batch_dir.trim())).filter(|d| d.is_dir()).unwrap_or_else(|| self.save_start_dir());
+                    if let Some(f) = rfd::FileDialog::new().set_title("Zielordner für die Warteschlange").set_directory(start).pick_folder() {
+                        self.note_save_dir(&f);
                         self.prefs.batch_dir = f.display().to_string();
                     }
                 }
@@ -325,28 +327,24 @@ impl App {
         if retry {
             self.queue.retry_failed();
         }
-        let dir = self.batch_dir();
+        let mut picked: Option<Vec<PathBuf>> = None;
         if add_folders {
-            if let Some(list) = rfd::FileDialog::new().set_title("DVD-Ordner wählen (VIDEO_TS)").pick_folders() {
-                self.queue_add_paths(&list);
-            }
+            picked = self.load_dialog("DVD-Ordner wählen (VIDEO_TS)").pick_folders();
         }
         if add_isos {
-            let d = rfd::FileDialog::new()
-                .set_title("ISO-Abbilder wählen")
-                .add_filter("DVD-Abbild", &["iso", "img"])
-                .set_directory(&dir);
-            if let Some(list) = d.pick_files() {
-                self.queue_add_paths(&list);
-            }
+            picked = self.load_dialog("ISO-Abbilder wählen").add_filter("DVD-Abbild", &["iso", "img"]).pick_files();
         }
         if add_projects {
-            let d = rfd::FileDialog::new()
-                .set_title("Projekte wählen")
-                .add_filter("DVDmanager-Projekt", &[discslim::engine::project::EXTENSION]);
-            if let Some(list) = d.pick_files() {
-                self.queue_add_paths(&list);
+            picked = self
+                .load_dialog("Projekte wählen")
+                .add_filter("DVDmanager-Projekt", &[discslim::engine::project::EXTENSION])
+                .pick_files();
+        }
+        if let Some(list) = picked {
+            if let Some(first) = list.first() {
+                self.note_load(first);
             }
+            self.queue_add_paths(&list);
         }
         if start {
             let ctx2 = ctx.clone();

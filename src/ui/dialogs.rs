@@ -89,11 +89,10 @@ pub(super) fn progress_bar(ui: &mut Ui, p: &style::Pal, f: f32) {
 
 impl App {
     pub(super) fn open_backup_dialog(&mut self) {
-        // Zuletzt gewählte Orte wieder anbieten
-        let videos = dirs_home().join("Videos");
-        let pick = |s: &str| if s.is_empty() || !Path::new(s).exists() { videos.clone() } else { PathBuf::from(s) };
-        let folder_base = pick(&self.prefs.folder_dir);
-        let file_base = pick(&self.prefs.file_dir);
+        // Zuletzt gewählten Ort wieder anbieten (sonst das Hauptverzeichnis zum Speichern)
+        let base = self.save_start_dir();
+        let folder_base = base.clone();
+        let file_base = base;
         let label = self.disc.as_ref().map(|d| sanitize(&d.source.label)).unwrap_or_else(|| "DVD".into());
         // Für die VOB-Datei: ohne Auswahl der Hauptfilm, beim Neu-Zusammenstellen die ganze Liste.
         let vob_sel: Vec<bool> = match (self.plan.mode, self.disc.as_ref()) {
@@ -121,14 +120,41 @@ impl App {
 
         if self.loader.is_some() {
             let mut cancel = false;
-            let (progress, text) = {
+            let (progress, text, thumbs) = {
                 let l = self.loader.as_ref().unwrap();
-                (l.progress, l.text.clone())
+                let thumbs: Vec<(usize, u64, egui::TextureId, Vec2)> =
+                    l.thumbs.iter().map(|(n, ms, t)| (*n, *ms, t.id(), t.size_vec2())).collect();
+                (l.progress, l.text.clone(), thumbs)
             };
-            modal(ctx, &p, "laden", 420.0, |ui| {
+            // Mit Vorschaubildern wird das Fenster breiter, damit drei Bilder nebeneinander passen.
+            let width = if thumbs.is_empty() { 420.0 } else { 520.0 };
+            modal(ctx, &p, "laden", width, |ui| {
                 ui.label(RichText::new(text).family(semibold()).size(16.0));
                 ui.add_space(8.0);
                 progress_bar(ui, &p, progress);
+                if !thumbs.is_empty() {
+                    ui.add_space(12.0);
+                    let gap = 10.0;
+                    let w = (ui.available_width() - 2.0 * gap) / 3.0;
+                    for row in thumbs.chunks(3) {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = gap;
+                            for (n, ms, id, size) in row {
+                                ui.vertical(|ui| {
+                                    ui.set_width(w);
+                                    // Einheitliche 16:9-Kachel, das Bild passend hinein
+                                    let (tile, _) = ui.allocate_exact_size(Vec2::new(w, w * 9.0 / 16.0), egui::Sense::hover());
+                                    ui.painter().rect_filled(tile, CornerRadius::same(6), p.screen);
+                                    let scale = (tile.width() / size.x.max(1.0)).min(tile.height() / size.y.max(1.0));
+                                    let r = egui::Rect::from_center_size(tile.center(), *size * scale);
+                                    ui.painter().image(*id, r, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+                                    ui.label(RichText::new(format!("Titel {n} · {}", fmt_time(*ms))).size(12.0).color(p.muted));
+                                });
+                            }
+                        });
+                        ui.add_space(4.0);
+                    }
+                }
                 ui.add_space(12.0);
                 ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
                     if soft_button(ui, &p, "Abbrechen").clicked() {
@@ -182,6 +208,7 @@ impl App {
         let mut start = false;
         let mut enqueue = false;
         let mut close = false;
+        let start_dir = self.save_start_dir();
         let dlg = self.backup_dlg.as_mut().unwrap();
         modal(ctx, &p, "backup", 560.0, |ui| {
             ui.label(RichText::new("Backup erstellen").family(semibold()).size(20.0));
@@ -222,7 +249,10 @@ impl App {
                 ui.add(edit);
                 if soft_button(ui, &p, &format!("{}  Wählen", ic::FOLDER_OPEN)).clicked() {
                     if is_folder {
-                        if let Some(f) = rfd::FileDialog::new().set_title("Zielordner wählen").pick_folder() {
+                        // Im Ordner über dem bisherigen Ziel beginnen
+                        let cur = PathBuf::from(value.as_str());
+                        let dir = cur.parent().filter(|x| x.is_dir()).map(Path::to_path_buf).unwrap_or_else(|| start_dir.clone());
+                        if let Some(f) = rfd::FileDialog::new().set_title("Zielordner wählen").set_directory(dir).pick_folder() {
                             *value = f.display().to_string();
                         }
                     } else {
@@ -237,9 +267,7 @@ impl App {
                         if let Some(n) = cur.file_name() {
                             d = d.set_file_name(n.to_string_lossy());
                         }
-                        if let Some(parent) = cur.parent().filter(|x| x.exists()) {
-                            d = d.set_directory(parent);
-                        }
+                        d = d.set_directory(cur.parent().filter(|x| x.is_dir()).map(Path::to_path_buf).unwrap_or_else(|| start_dir.clone()));
                         if let Some(f) = d.save_file() {
                             *value = f.display().to_string();
                         }
@@ -498,12 +526,25 @@ impl App {
         self.prefs.remove_puo = self.plan.remove_puo;
         self.prefs.region_free = self.plan.region_free;
         let parent_of = |s: &str| PathBuf::from(s).parent().map(|p| p.display().to_string()).unwrap_or_default();
-        match dlg.kind {
-            OutputKind::Folder => self.prefs.folder_dir = parent_of(&dlg.folder),
-            OutputKind::Vob => self.prefs.file_dir = parent_of(&dlg.vob),
-            OutputKind::Mpeg => self.prefs.file_dir = parent_of(&dlg.mpg),
-            _ => self.prefs.file_dir = parent_of(&dlg.iso),
-        }
+        let dir = match dlg.kind {
+            OutputKind::Folder => {
+                self.prefs.folder_dir = parent_of(&dlg.folder);
+                self.prefs.folder_dir.clone()
+            }
+            OutputKind::Vob => {
+                self.prefs.file_dir = parent_of(&dlg.vob);
+                self.prefs.file_dir.clone()
+            }
+            OutputKind::Mpeg => {
+                self.prefs.file_dir = parent_of(&dlg.mpg);
+                self.prefs.file_dir.clone()
+            }
+            _ => {
+                self.prefs.file_dir = parent_of(&dlg.iso);
+                self.prefs.file_dir.clone()
+            }
+        };
+        self.note_save_dir(Path::new(&dir));
         let output = match dlg.kind {
             OutputKind::Folder => Output::Folder(PathBuf::from(&dlg.folder)),
             OutputKind::Iso => Output::Iso(with_iso_ext(&dlg.iso)),
@@ -654,7 +695,8 @@ impl App {
         let p = self.pal;
         let mut close = false;
         let mut dark = p.dark;
-        modal(ctx, &p, "einstellungen", 480.0, |ui| {
+        let dirs_before = (self.prefs.load_dir.clone(), self.prefs.save_dir.clone());
+        modal(ctx, &p, "einstellungen", 520.0, |ui| {
             ui.label(RichText::new("Einstellungen").family(semibold()).size(20.0));
             ui.add_space(4.0);
             ui.label(RichText::new("Design").family(semibold()).size(13.0).color(p.muted));
@@ -679,6 +721,44 @@ impl App {
             );
 
             ui.add_space(6.0);
+            ui.label(RichText::new("Verzeichnisse").family(semibold()).size(13.0).color(p.muted));
+            for (label, value, title) in [
+                ("Laden", &mut self.prefs.load_dir, "Hauptverzeichnis zum Laden von DVDs, ISOs und Projekten"),
+                ("Speichern", &mut self.prefs.save_dir, "Hauptverzeichnis für Backups und Projekte"),
+            ] {
+                ui.horizontal(|ui| {
+                    ui.add_sized([70.0, 24.0], egui::Label::new(RichText::new(label).color(p.muted)));
+                    let edit = egui::TextEdit::singleline(value)
+                        .hint_text("nicht festgelegt")
+                        .desired_width(ui.available_width() - 120.0)
+                        .margin(Margin::symmetric(8, 5));
+                    ui.add(edit);
+                    if ui.button(RichText::new(format!("{}  Wählen", ic::FOLDER_OPEN)).size(13.0)).clicked() {
+                        let mut d = rfd::FileDialog::new().set_title(title);
+                        if Path::new(value.trim()).is_dir() {
+                            d = d.set_directory(value.trim());
+                        }
+                        if let Some(f) = d.pick_folder() {
+                            *value = f.display().to_string();
+                        }
+                    }
+                    if !value.is_empty() && style::icon_button(ui, &p, ic::X, "Nicht mehr festlegen").clicked() {
+                        value.clear();
+                    }
+                });
+            }
+            for v in [&self.prefs.load_dir, &self.prefs.save_dir] {
+                if !v.trim().is_empty() && !Path::new(v.trim()).is_dir() {
+                    ui.label(RichText::new(format!("{}  „{}“ gibt es nicht.", ic::WARNING, v.trim())).size(12.5).color(p.warn));
+                }
+            }
+            ui.label(
+                RichText::new("Nach dem Start öffnen die Dateidialoge hier. Danach merkt sich das Programm den zuletzt gewählten Ort.")
+                    .size(12.5)
+                    .color(p.faint),
+            );
+
+            ui.add_space(6.0);
             ui.label(RichText::new("Backup").family(semibold()).size(13.0).color(p.muted));
             style::check(ui, &p, &mut self.prefs.deep_default, "Tiefenanalyse vor dem Backup vorschlagen");
 
@@ -691,6 +771,14 @@ impl App {
         });
         if dark != p.dark {
             self.set_dark(ctx, dark);
+        }
+        // Ein neu festgelegtes Hauptverzeichnis gilt sofort, nicht erst nach dem Neustart.
+        if self.prefs.load_dir != dirs_before.0 {
+            self.last_load_dir = None;
+        }
+        if self.prefs.save_dir != dirs_before.1 {
+            self.last_save_dir = None;
+            self.prefs.batch_dir.clear();
         }
         if close {
             self.settings_open = false;

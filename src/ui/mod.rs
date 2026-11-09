@@ -46,6 +46,8 @@ pub enum TargetKind {
 
 enum LoadMsg {
     Progress(f32, String),
+    /// Vorschaubild eines Titels: Nummer, Länge (ms), Bild
+    Thumb(usize, u64, egui::ColorImage),
     Done(Box<Disc>),
     Failed(String),
 }
@@ -56,7 +58,12 @@ struct Loader {
     text: String,
     cancel: Arc<AtomicBool>,
     is_sample: bool,
+    /// Vorschaubilder der Titel, die schon fertig sind (Nummer, Länge, Bild)
+    thumbs: Vec<(usize, u64, egui::TextureHandle)>,
 }
+
+/// Höchstens so viele Vorschaubilder beim Einlesen
+const LOAD_THUMBS: usize = 6;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum OutputKind {
@@ -131,6 +138,9 @@ pub struct Prefs {
     /// Warteschlange: Ausgabe (ISO oder Ordner) und Zielordner für neu hinzugefügte DVDs
     pub batch_kind: OutputKind,
     pub batch_dir: String,
+    /// Hauptverzeichnisse aus den Einstellungen: dort öffnen die Dialoge nach dem Start.
+    pub load_dir: String,
+    pub save_dir: String,
 }
 
 impl Default for Prefs {
@@ -156,6 +166,8 @@ impl Default for Prefs {
             chapter_every_min: 5,
             batch_kind: OutputKind::Iso,
             batch_dir: String::new(),
+            load_dir: String::new(),
+            save_dir: String::new(),
         }
     }
 }
@@ -198,6 +210,9 @@ pub struct App {
     /// Stapelverarbeitung
     queue: Queue,
     queue_open: bool,
+    /// Zuletzt gewählte Orte in dieser Sitzung (zum Laden bzw. Speichern)
+    last_load_dir: Option<PathBuf>,
+    last_save_dir: Option<PathBuf>,
     /// Nur im Entwicklungs-Build: springt für Prüfbilder in einen bestimmten Zustand.
     #[cfg(debug_assertions)]
     dev_state: Option<String>,
@@ -250,8 +265,11 @@ impl App {
             if let Some(v) = st.get_string("batch_kind") {
                 prefs.batch_kind = if v == "folder" { OutputKind::Folder } else { OutputKind::Iso };
             }
-            if let Some(v) = st.get_string("batch_dir") {
-                prefs.batch_dir = v;
+            if let Some(v) = st.get_string("load_dir") {
+                prefs.load_dir = v;
+            }
+            if let Some(v) = st.get_string("save_dir") {
+                prefs.save_dir = v;
             }
             if let Some(v) = st.get_string("folder_dir") {
                 prefs.folder_dir = v;
@@ -318,6 +336,8 @@ impl App {
             notice: None,
             queue: Queue::default(),
             queue_open: false,
+            last_load_dir: None,
+            last_save_dir: None,
             #[cfg(debug_assertions)]
             dev_state: std::env::var("DISCSLIM_DEV_STATE").ok(),
         };
@@ -377,14 +397,64 @@ impl App {
         self.project_path = Some(path.to_path_buf());
     }
 
-    pub(super) fn pick_project(&mut self, ctx: &egui::Context) {
-        let mut d = rfd::FileDialog::new()
-            .set_title("Projekt öffnen")
-            .add_filter("DVDmanager-Projekt", &[project::EXTENSION]);
-        if let Some(dir) = Some(&self.prefs.file_dir).filter(|s| !s.is_empty() && Path::new(s).exists()) {
-            d = d.set_directory(dir);
+    /// Startort der Dialoge zum Laden: zuletzt gewählt, sonst das Hauptverzeichnis.
+    pub(super) fn load_start_dir(&self) -> Option<PathBuf> {
+        self.last_load_dir
+            .clone()
+            .or_else(|| Some(PathBuf::from(self.prefs.load_dir.trim())).filter(|p| !p.as_os_str().is_empty()))
+            .filter(|p| p.is_dir())
+    }
+
+    /// Startort der Dialoge zum Speichern: zuletzt gewählt, sonst das Hauptverzeichnis,
+    /// sonst der beim letzten Backup benutzte Ort, sonst „Videos“.
+    pub(super) fn save_start_dir(&self) -> PathBuf {
+        let set = |s: &str| Some(PathBuf::from(s.trim())).filter(|p| !p.as_os_str().is_empty() && p.is_dir());
+        self.last_save_dir
+            .clone()
+            .filter(|p| p.is_dir())
+            .or_else(|| set(&self.prefs.save_dir))
+            .or_else(|| set(&self.prefs.file_dir))
+            .or_else(|| set(&self.prefs.folder_dir))
+            .unwrap_or_else(|| dialogs::dirs_home().join("Videos"))
+    }
+
+    /// Merkt sich den Ort einer geladenen DVD, ISO oder Projektdatei. Bei einem
+    /// VIDEO_TS-Ordner ist das der Ordner, in dem die DVD-Ordner liegen.
+    pub(super) fn note_load(&mut self, picked: &Path) {
+        let mut dir = picked.parent();
+        if picked.file_name().is_some_and(|n| n.eq_ignore_ascii_case("VIDEO_TS")) {
+            dir = dir.and_then(Path::parent);
         }
+        if let Some(d) = dir.filter(|d| !d.as_os_str().is_empty()) {
+            self.last_load_dir = Some(d.to_path_buf());
+        }
+    }
+
+    /// Merkt sich den Ordner, in dem gespeichert wurde.
+    pub(super) fn note_save_dir(&mut self, dir: &Path) {
+        if !dir.as_os_str().is_empty() {
+            self.last_save_dir = Some(dir.to_path_buf());
+        }
+    }
+
+    /// Dateidialog zum Laden, im zuletzt benutzten Ordner.
+    pub(super) fn load_dialog(&self, title: &str) -> rfd::FileDialog {
+        let d = rfd::FileDialog::new().set_title(title);
+        match self.load_start_dir() {
+            Some(dir) => d.set_directory(dir),
+            None => d,
+        }
+    }
+
+    /// Dateidialog zum Speichern, im zuletzt benutzten Ordner.
+    pub(super) fn save_dialog(&self, title: &str) -> rfd::FileDialog {
+        rfd::FileDialog::new().set_title(title).set_directory(self.save_start_dir())
+    }
+
+    pub(super) fn pick_project(&mut self, ctx: &egui::Context) {
+        let d = self.load_dialog("Projekt öffnen").add_filter("DVDmanager-Projekt", &[project::EXTENSION]);
         if let Some(p) = d.pick_file() {
+            self.note_load(&p);
             self.open_project(ctx, &p);
         }
     }
@@ -402,21 +472,20 @@ impl App {
                     .and_then(|p| p.file_name())
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| format!("{}.{}", dialogs::file_stem(&disc.source.label), project::EXTENSION));
-                let mut d = rfd::FileDialog::new()
-                    .set_title("Projekt speichern")
+                let mut d = self
+                    .save_dialog("Projekt speichern")
                     .add_filter("DVDmanager-Projekt", &[project::EXTENSION])
                     .set_file_name(name);
-                let dir = self
-                    .project_path
-                    .as_ref()
-                    .and_then(|p| p.parent().map(Path::to_path_buf))
-                    .or_else(|| Some(PathBuf::from(&self.prefs.file_dir)).filter(|p| p.exists()));
-                if let Some(dir) = dir {
+                // Ein schon gespeichertes Projekt bleibt in seinem Ordner.
+                if let Some(dir) = self.project_path.as_ref().and_then(|p| p.parent()).filter(|d| d.is_dir()) {
                     d = d.set_directory(dir);
                 }
                 let Some(mut p) = d.save_file() else { return };
                 if !Project::is_project_path(&p) {
                     p.set_extension(project::EXTENSION);
+                }
+                if let Some(dir) = p.parent() {
+                    self.note_save_dir(&dir.to_path_buf());
                 }
                 p
             }
@@ -481,8 +550,14 @@ impl App {
             let _ = tx.send(msg);
             ctx2.request_repaint();
         });
-        self.loader =
-            Some(Loader { rx, progress: 0.0, text: "DVD wird geöffnet …".into(), cancel, is_sample });
+        self.loader = Some(Loader {
+            rx,
+            progress: 0.0,
+            text: "DVD wird geöffnet …".into(),
+            cancel,
+            is_sample,
+            thumbs: Vec::new(),
+        });
     }
 
     fn pump_loader(&mut self, ctx: &egui::Context) {
@@ -494,6 +569,11 @@ impl App {
                 LoadMsg::Progress(f, t) => {
                     l.progress = f;
                     l.text = t;
+                }
+                LoadMsg::Thumb(n, ms, img) => {
+                    let tex = ctx.load_texture(format!("laden-{n}"), img, egui::TextureOptions::LINEAR);
+                    l.thumbs.push((n, ms, tex));
+                    l.thumbs.sort_by_key(|t| t.0);
                 }
                 LoadMsg::Done(d) => finished = Some(Ok(d)),
                 LoadMsg::Failed(e) => finished = Some(Err(e)),
@@ -624,18 +704,20 @@ impl App {
     }
 
     fn pick_folder(&mut self, ctx: &egui::Context) {
-        if let Some(p) = rfd::FileDialog::new().set_title("DVD-Ordner wählen (VIDEO_TS)").pick_folder() {
+        if let Some(p) = self.load_dialog("DVD-Ordner wählen (VIDEO_TS)").pick_folder() {
+            self.note_load(&p);
             self.open_path(ctx, p);
         }
     }
 
     fn pick_iso(&mut self, ctx: &egui::Context) {
-        if let Some(p) = rfd::FileDialog::new()
-            .set_title("ISO-Abbild wählen")
+        if let Some(p) = self
+            .load_dialog("ISO-Abbild wählen")
             .add_filter("DVD-Abbild", &["iso", "img"])
             .add_filter("Alle Dateien", &["*"])
             .pick_file()
         {
+            self.note_load(&p);
             self.open_path(ctx, p);
         }
     }
@@ -651,6 +733,7 @@ impl App {
             return;
         }
         if self.job.is_none() && self.loader.is_none() {
+            self.note_load(&dropped[0]);
             self.open_path(ctx, dropped[0].clone());
         }
     }
@@ -677,8 +760,12 @@ impl App {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
         }
-        // Mit dem Zählen warten, bis eine Ladeaktion fertig ist.
-        if self.loader.is_some() {
+        // Mit dem Zählen warten, bis eine Ladeaktion fertig ist (außer beim Prüfbild des Ladedialogs).
+        #[cfg(debug_assertions)]
+        let show_loading = self.dev_state.as_deref() == Some("loading");
+        #[cfg(not(debug_assertions))]
+        let show_loading = false;
+        if self.loader.is_some() && !show_loading {
             return;
         }
         self.frames += 1;
@@ -828,6 +915,19 @@ impl App {
                     d.no_split = true;
                 }
             }
+            ("loading", 2) => {
+                // Ladedialog mit Vorschaubildern: die DVD öffnen und das Einlesen offen halten
+                if let Some(d) = self.disc.take() {
+                    let origin = d.source.origin.clone();
+                    self.start_loader(ctx, false, move |tx, _cancel| {
+                        let disc = Disc::open(Source::open(&origin)?)?;
+                        let _ = tx.send(LoadMsg::Progress(0.86, "DVD wird analysiert …".into()));
+                        spawn_load_thumbs(&disc, tx.clone());
+                        std::thread::sleep(std::time::Duration::from_secs(30));
+                        Ok(disc)
+                    });
+                }
+            }
             ("chapters", 5) => {
                 // Eintrag mit eigenen Kapitelmarken, eine davon außerhalb des Schnitts
                 self.plan.mode = Mode::Reauthor;
@@ -919,6 +1019,7 @@ fn load_and_analyse(
     if disc.check_scrambled() {
         return Err(COPY_PROTECTED.into());
     }
+    spawn_load_thumbs(&disc, tx.clone());
     let tx2 = tx.clone();
     let mut cb = |f: f32, t: &str| -> bool {
         let _ = tx2.send(LoadMsg::Progress(0.8 + f * 0.2, t.to_string()));
@@ -929,6 +1030,36 @@ fn load_and_analyse(
         return Err(COPY_PROTECTED.into());
     }
     Ok(disc)
+}
+
+/// Holt neben der Analyse für die längsten Titel je ein Vorschaubild. Läuft in einem
+/// eigenen Thread und endet von selbst, wenn das Einlesen vorbei ist.
+fn spawn_load_thumbs(disc: &Disc, tx: std::sync::mpsc::Sender<LoadMsg>) {
+    let mut picks: Vec<usize> = (0..disc.titles.len()).filter(|i| disc.titles[*i].ms > 0).collect();
+    picks.sort_by_key(|i| std::cmp::Reverse(disc.titles[*i].ms));
+    picks.truncate(LOAD_THUMBS);
+    let jobs: Vec<_> = picks
+        .into_iter()
+        .map(|i| {
+            let t = &disc.titles[i];
+            let segments = discslim::engine::preview::title_segments(disc, i, 0, t.chapters.len().saturating_sub(1));
+            // Nicht ganz am Anfang: dort ist oft noch Schwarzbild oder ein Logo.
+            let at = (t.ms as f64 * 0.15).min(300_000.0);
+            (t.number, t.ms, segments, at)
+        })
+        .collect();
+    let source = disc.source.clone();
+    std::thread::spawn(move || {
+        for (n, ms, segments, at) in jobs {
+            if segments.is_empty() {
+                continue;
+            }
+            let Some(img) = thumbs::grab_frame(source.clone(), segments, at, std::time::Duration::from_secs(5)) else { continue };
+            if tx.send(LoadMsg::Thumb(n, ms, img)).is_err() {
+                return; // Einlesen schon fertig
+            }
+        }
+    });
 }
 
 const COPY_PROTECTED: &str = "Diese DVD ist kopiergeschützt (CSS). Das Programm verarbeitet bewusst nur ungeschützte Inhalte, etwa selbst erstellte DVDs oder eigene VIDEO_TS-Ordner.";
@@ -1006,7 +1137,8 @@ impl eframe::App for App {
         storage.set_string("jump_secs", self.prefs.jump_secs.to_string());
         storage.set_string("chapter_every_min", self.prefs.chapter_every_min.to_string());
         storage.set_string("batch_kind", if self.prefs.batch_kind == OutputKind::Folder { "folder" } else { "iso" }.into());
-        storage.set_string("batch_dir", self.prefs.batch_dir.clone());
+        storage.set_string("load_dir", self.prefs.load_dir.clone());
+        storage.set_string("save_dir", self.prefs.save_dir.clone());
         storage.set_string("file_dir", self.prefs.file_dir.clone());
         let p = &self.prefs;
         for (key, v) in [

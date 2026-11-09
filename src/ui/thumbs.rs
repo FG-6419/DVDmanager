@@ -57,29 +57,33 @@ fn shrink(rgba: &[u8], w: usize, h: usize, aspect: f32) -> ColorImage {
     ColorImage::from_rgba_unmultiplied([tw, th], &out)
 }
 
+/// Dekodiert ein einzelnes Bild an einer Stelle und verkleinert es. Blockiert bis zu `timeout`.
+pub fn grab_frame(source: Source, segments: Vec<Segment>, ms: f64, timeout: Duration) -> Option<ColorImage> {
+    let handle = preview::spawn(source, segments, 0.0, None, 0, None);
+    let _ = handle.cmd.send(PreviewCmd::SeekTime { ms, exact: true, id: 1 });
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        match handle.frames.recv_timeout(Duration::from_millis(200)) {
+            Ok(f) if f.seek_id == 1 && !f.eos => return Some(shrink(&f.rgba, f.width, f.height, f.aspect)),
+            Ok(_) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(_) => break,
+        }
+    }
+    None
+}
+
 impl Thumbs {
     pub fn new(ctx: egui::Context) -> Self {
         let (tx, req_rx) = channel::<Request>();
         let (res_tx, rx) = channel();
         std::thread::spawn(move || {
             for req in req_rx.iter() {
-                let handle = preview::spawn(req.source, req.segments, 0.0, None, 0, None);
-                let _ = handle.cmd.send(PreviewCmd::SeekTime { ms: req.key.3 as f64, exact: true, id: 1 });
-                let deadline = Instant::now() + Duration::from_secs(6);
-                while Instant::now() < deadline {
-                    match handle.frames.recv_timeout(Duration::from_millis(200)) {
-                        Ok(f) if f.seek_id == 1 && !f.eos => {
-                            let img = shrink(&f.rgba, f.width, f.height, f.aspect);
-                            if res_tx.send((req.key, img)).is_err() {
-                                return;
-                            }
-                            ctx.request_repaint();
-                            break;
-                        }
-                        Ok(_) => {}
-                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-                        Err(_) => break,
+                if let Some(img) = grab_frame(req.source, req.segments, req.key.3 as f64, Duration::from_secs(6)) {
+                    if res_tx.send((req.key, img)).is_err() {
+                        return;
                     }
+                    ctx.request_repaint();
                 }
             }
         });
