@@ -20,6 +20,8 @@ struct BusState {
     /// Neu anfangen ab dieser Zeit (wird vom Abspiel-Thread übernommen)
     restart_at: Option<f64>,
     muted: bool,
+    /// Blende des gezeigten Eintrags: (Blenden, sichtbarer Anfang, sichtbares Ende)
+    fade: Option<(crate::engine::plan::Fades, f64, f64)>,
     clock: Option<f64>,
     quit: bool,
     device_ok: bool,
@@ -85,6 +87,11 @@ impl AudioBus {
 
     pub fn set_muted(&self, muted: bool) {
         self.with(|s| s.muted = muted);
+    }
+
+    /// Blende, mit der die Vorschau den Ton ein- und ausblendet.
+    pub fn set_fade(&self, fade: Option<(crate::engine::plan::Fades, f64, f64)>) {
+        self.with(|s| s.fade = fade);
     }
 
     pub fn muted(&self) -> bool {
@@ -223,9 +230,21 @@ mod player {
                         let _ = waveOutUnprepareHeader(hwo, &mut b.hdr, hdr_size);
                     }
                 }
-                bus.with(|s| fill(&mut s.chunks, cursor, BLOCK, &mut scratch));
+                let fade = bus.with(|s| {
+                    fill(&mut s.chunks, cursor, BLOCK, &mut scratch);
+                    s.fade
+                });
                 if muted {
                     scratch.iter_mut().for_each(|v| *v = 0);
+                } else if let Some((f, a, b)) = fade {
+                    for (i, pair) in scratch.chunks_exact_mut(2).enumerate() {
+                        let t = cursor + i as f64 * 1000.0 / RATE;
+                        if let Some((g, _)) = f.at(t, a, b) {
+                            for v in pair {
+                                *v = (f32::from(*v) * g) as i16;
+                            }
+                        }
+                    }
                 }
                 b.data.copy_from_slice(&scratch);
                 cursor += BLOCK as f64 * 1000.0 / RATE;
@@ -570,9 +589,12 @@ mod mf {
         bits: u32,
         provides: bool,
         out_size: u32,
+        want: Option<u32>,
     }
 
-    fn choose_output(mft: &IMFTransform) -> Option<(u32, bool, u32)> {
+    /// Wählt das Ausgabeformat des Decoders. Ohne `want` bevorzugt Stereo (Vorschau),
+    /// mit `want` genau diese Kanalzahl und Gleitkomma (zum Neu-Kodieren).
+    fn choose_output(mft: &IMFTransform, want: Option<u32>) -> Option<(u32, bool, u32)> {
         unsafe {
             let mut best: Option<(IMFMediaType, u32, bool, u32, i32)> = None;
             for i in 0..64 {
@@ -585,8 +607,14 @@ mod mf {
                 if !(float || pcm16) {
                     continue;
                 }
-                // Stereo bevorzugt, dann Ganzzahl
-                let score = i32::from(ch == 2) * 4 + i32::from(pcm16) * 2 + i32::from(ch > 0);
+                if want.is_some_and(|w| w != ch) {
+                    continue;
+                }
+                // Stereo bevorzugt, dann Ganzzahl (Vorschau) bzw. Gleitkomma (Neu-Kodieren)
+                let score = match want {
+                    None => i32::from(ch == 2) * 4 + i32::from(pcm16) * 2 + i32::from(ch > 0),
+                    Some(_) => i32::from(float) * 2 + 1,
+                };
                 if best.as_ref().is_none_or(|b| score > b.4) {
                     best = Some((t, ch, float, bits, score));
                 }
@@ -597,38 +625,122 @@ mod mf {
         }
     }
 
+    /// Erstes passendes MFT einer Kategorie.
+    unsafe fn find_mft(
+        category: GUID,
+        input: Option<&MFT_REGISTER_TYPE_INFO>,
+        output: Option<&MFT_REGISTER_TYPE_INFO>,
+    ) -> Option<IMFTransform> {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        MFStartup(MF_VERSION, MFSTARTUP_LITE).ok()?;
+        let mut list: *mut Option<IMFActivate> = std::ptr::null_mut();
+        let mut count = 0u32;
+        MFTEnumEx(
+            category,
+            MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_SORTANDFILTER,
+            input.map(|i| i as *const _),
+            output.map(|o| o as *const _),
+            &mut list,
+            &mut count,
+        )
+        .ok()?;
+        if list.is_null() || count == 0 {
+            return None;
+        }
+        let items = std::slice::from_raw_parts_mut(list, count as usize);
+        let activate = items[0].take();
+        for it in items.iter_mut() {
+            drop(it.take());
+        }
+        CoTaskMemFree(Some(list as *const _));
+        activate?.ActivateObject().ok()
+    }
+
+    /// Holt fertige Stücke ab. `true`, wenn sich das Ausgabeformat geändert hat.
+    unsafe fn pull(mft: &IMFTransform, provides: bool, out_size: u32, out: &mut Vec<IMFSample>) -> bool {
+        for _ in 0..64 {
+            let own = if provides {
+                None
+            } else {
+                let Ok(s) = MFCreateSample() else { return false };
+                let Ok(b) = MFCreateMemoryBuffer(out_size) else { return false };
+                let _ = s.AddBuffer(&b);
+                Some(s)
+            };
+            let mut db = [MFT_OUTPUT_DATA_BUFFER {
+                dwStreamID: 0,
+                pSample: std::mem::ManuallyDrop::new(own),
+                dwStatus: 0,
+                pEvents: std::mem::ManuallyDrop::new(None),
+            }];
+            let mut status = 0u32;
+            let res = mft.ProcessOutput(0, &mut db, &mut status);
+            let sample = std::mem::ManuallyDrop::into_inner(std::mem::replace(
+                &mut db[0].pSample,
+                std::mem::ManuallyDrop::new(None),
+            ));
+            drop(std::mem::ManuallyDrop::into_inner(std::mem::replace(
+                &mut db[0].pEvents,
+                std::mem::ManuallyDrop::new(None),
+            )));
+            match res {
+                Ok(()) => {
+                    if let Some(s) = sample {
+                        out.push(s);
+                    }
+                }
+                Err(e) if e.code() == MF_E_TRANSFORM_STREAM_CHANGE => return true,
+                Err(_) => return false,
+            }
+        }
+        false
+    }
+
+    unsafe fn input_sample(data: &[u8], time_ms: Option<f64>) -> Option<IMFSample> {
+        let buf = MFCreateMemoryBuffer(data.len().max(1) as u32).ok()?;
+        let mut ptr: *mut u8 = std::ptr::null_mut();
+        buf.Lock(&mut ptr, None, None).ok()?;
+        std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
+        let _ = buf.Unlock();
+        let _ = buf.SetCurrentLength(data.len() as u32);
+        let sample = MFCreateSample().ok()?;
+        let _ = sample.AddBuffer(&buf);
+        if let Some(t) = time_ms {
+            let _ = sample.SetSampleTime((t * 10_000.0) as i64);
+        }
+        Some(sample)
+    }
+
+    unsafe fn sample_bytes(s: &IMFSample) -> Option<Vec<u8>> {
+        let buf = s.ConvertToContiguousBuffer().ok()?;
+        let mut ptr: *mut u8 = std::ptr::null_mut();
+        let mut len = 0u32;
+        buf.Lock(&mut ptr, None, Some(&mut len)).ok()?;
+        let v = std::slice::from_raw_parts(ptr, len as usize).to_vec();
+        let _ = buf.Unlock();
+        Some(v)
+    }
+
     impl MfDecoder {
         pub fn new(codec: Codec, channels: u8) -> Option<Self> {
+            Self::with_output(codec, channels, None)
+        }
+
+        /// Decoder, der alle `channels` Kanäle als Gleitkomma liefert (zum Neu-Kodieren).
+        pub fn full(codec: Codec, channels: u8) -> Option<Self> {
+            let d = Self::with_output(codec, channels, Some(u32::from(channels)))?;
+            d.float.then_some(d)
+        }
+
+        fn with_output(codec: Codec, channels: u8, want: Option<u32>) -> Option<Self> {
             unsafe {
-                let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-                MFStartup(MF_VERSION, MFSTARTUP_LITE).ok()?;
                 let subtype = match codec {
                     Codec::Ac3 => MFAudioFormat_Dolby_AC3,
                     Codec::Mpeg => MFAudioFormat_MPEG,
                     Codec::Lpcm => return None,
                 };
                 let info = MFT_REGISTER_TYPE_INFO { guidMajorType: MFMediaType_Audio, guidSubtype: subtype };
-                let mut list: *mut Option<IMFActivate> = std::ptr::null_mut();
-                let mut count = 0u32;
-                MFTEnumEx(
-                    MFT_CATEGORY_AUDIO_DECODER,
-                    MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_SORTANDFILTER,
-                    Some(&info),
-                    None,
-                    &mut list,
-                    &mut count,
-                )
-                .ok()?;
-                if list.is_null() || count == 0 {
-                    return None;
-                }
-                let items = std::slice::from_raw_parts_mut(list, count as usize);
-                let activate = items[0].take();
-                for it in items.iter_mut() {
-                    drop(it.take());
-                }
-                CoTaskMemFree(Some(list as *const _));
-                let mft: IMFTransform = activate?.ActivateObject().ok()?;
+                let mft = find_mft(MFT_CATEGORY_AUDIO_DECODER, Some(&info), None)?;
 
                 let input = MFCreateMediaType().ok()?;
                 input.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio).ok()?;
@@ -636,11 +748,52 @@ mod mf {
                 input.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, RATE as u32).ok()?;
                 input.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, u32::from(channels.max(1))).ok()?;
                 mft.SetInputType(0, &input, 0).ok()?;
-                let (ch, float, bits) = choose_output(&mft)?;
+                let (ch, float, bits) = choose_output(&mft, want)?;
                 let info = mft.GetOutputStreamInfo(0).ok()?;
                 let provides = info.dwFlags & (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.0 as u32) != 0;
                 let _ = mft.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0);
-                Some(Self { mft, channels: ch, float, bits, provides, out_size: info.cbSize.max(1536 * 8 * 4) })
+                Some(Self { mft, channels: ch, float, bits, provides, out_size: info.cbSize.max(1536 * 8 * 4), want })
+            }
+        }
+
+        /// Ein Rahmen hinein, Abtastwerte aller Kanäle (verschachtelt, Gleitkomma) heraus.
+        pub fn decode_raw(&mut self, frame: &[u8]) -> Vec<f32> {
+            let mut out = Vec::new();
+            unsafe {
+                let Some(sample) = input_sample(frame, None) else { return out };
+                let mut got = Vec::new();
+                if self.mft.ProcessInput(0, &sample, 0).is_err() {
+                    self.pull_all(&mut got);
+                    let _ = self.mft.ProcessInput(0, &sample, 0);
+                }
+                self.pull_all(&mut got);
+                for s in got {
+                    if let Some(b) = sample_bytes(&s) {
+                        if self.float {
+                            out.extend(b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])));
+                        } else {
+                            out.extend(b.chunks_exact(2).map(|c| f32::from(i16::from_le_bytes([c[0], c[1]])) / 32768.0));
+                        }
+                    }
+                }
+            }
+            out
+        }
+
+        pub fn channels(&self) -> u32 {
+            self.channels
+        }
+
+        unsafe fn pull_all(&mut self, got: &mut Vec<IMFSample>) {
+            for _ in 0..4 {
+                if !pull(&self.mft, self.provides, self.out_size, got) {
+                    return;
+                }
+                if let Some((ch, float, bits)) = choose_output(&self.mft, self.want) {
+                    self.channels = ch;
+                    self.float = float;
+                    self.bits = bits;
+                }
             }
         }
 
@@ -654,73 +807,21 @@ mod mf {
         pub fn decode(&mut self, frame: &[u8], time_ms: Option<f64>) -> Vec<(Option<f64>, Vec<i16>)> {
             let mut out = Vec::new();
             unsafe {
-                let Ok(buf) = MFCreateMemoryBuffer(frame.len() as u32) else { return out };
-                let mut ptr: *mut u8 = std::ptr::null_mut();
-                if buf.Lock(&mut ptr, None, None).is_err() {
-                    return out;
-                }
-                std::ptr::copy_nonoverlapping(frame.as_ptr(), ptr, frame.len());
-                let _ = buf.Unlock();
-                let _ = buf.SetCurrentLength(frame.len() as u32);
-                let Ok(sample) = MFCreateSample() else { return out };
-                let _ = sample.AddBuffer(&buf);
-                if let Some(t) = time_ms {
-                    let _ = sample.SetSampleTime((t * 10_000.0) as i64);
-                }
+                let Some(sample) = input_sample(frame, time_ms) else { return out };
+                let mut got = Vec::new();
                 if self.mft.ProcessInput(0, &sample, 0).is_err() {
                     // Voll: erst abholen, dann noch einmal
-                    self.drain(&mut out);
+                    self.pull_all(&mut got);
                     let _ = self.mft.ProcessInput(0, &sample, 0);
                 }
-                self.drain(&mut out);
-            }
-            out
-        }
-
-        unsafe fn drain(&mut self, out: &mut Vec<(Option<f64>, Vec<i16>)>) {
-            for _ in 0..16 {
-                let own = if self.provides {
-                    None
-                } else {
-                    let Ok(s) = MFCreateSample() else { return };
-                    let Ok(b) = MFCreateMemoryBuffer(self.out_size) else { return };
-                    let _ = s.AddBuffer(&b);
-                    Some(s)
-                };
-                let mut db = [MFT_OUTPUT_DATA_BUFFER {
-                    dwStreamID: 0,
-                    pSample: std::mem::ManuallyDrop::new(own),
-                    dwStatus: 0,
-                    pEvents: std::mem::ManuallyDrop::new(None),
-                }];
-                let mut status = 0u32;
-                let res = self.mft.ProcessOutput(0, &mut db, &mut status);
-                let sample = std::mem::ManuallyDrop::into_inner(std::mem::replace(
-                    &mut db[0].pSample,
-                    std::mem::ManuallyDrop::new(None),
-                ));
-                drop(std::mem::ManuallyDrop::into_inner(std::mem::replace(
-                    &mut db[0].pEvents,
-                    std::mem::ManuallyDrop::new(None),
-                )));
-                match res {
-                    Ok(()) => {
-                        if let Some(s) = sample {
-                            if let Some(chunk) = self.read_sample(&s) {
-                                out.push(chunk);
-                            }
-                        }
+                self.pull_all(&mut got);
+                for s in got {
+                    if let Some(chunk) = self.read_sample(&s) {
+                        out.push(chunk);
                     }
-                    Err(e) if e.code() == MF_E_TRANSFORM_STREAM_CHANGE => {
-                        if let Some((ch, float, bits)) = choose_output(&self.mft) {
-                            self.channels = ch;
-                            self.float = float;
-                            self.bits = bits;
-                        }
-                    }
-                    Err(_) => return,
                 }
             }
+            out
         }
 
         unsafe fn read_sample(&self, s: &IMFSample) -> Option<(Option<f64>, Vec<i16>)> {
@@ -761,4 +862,122 @@ mod mf {
             Some((time, out))
         }
     }
+
+    /// Dolby-Digital-Encoder von Windows (nur Mono und Stereo; dient den Tests als
+    /// Quelle für AC-3-Material).
+    pub struct MfEncoder {
+        mft: IMFTransform,
+        channels: u32,
+        provides: bool,
+        out_size: u32,
+    }
+
+    impl MfEncoder {
+        /// Encoder für `channels` Kanäle (1, 2 oder 6) mit `kbps` kBit/s bei 48 kHz.
+        pub fn new(channels: u32, kbps: u32) -> Option<Self> {
+            unsafe {
+                let info = MFT_REGISTER_TYPE_INFO { guidMajorType: MFMediaType_Audio, guidSubtype: MFAudioFormat_Dolby_AC3 };
+                let mft = find_mft(MFT_CATEGORY_AUDIO_ENCODER, None, Some(&info))?;
+                let mask: u32 = match channels {
+                    1 => 0x4,
+                    2 => 0x3,
+                    6 => 0x3F,
+                    _ => return None,
+                };
+                let output = MFCreateMediaType().ok()?;
+                output.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio).ok()?;
+                output.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_Dolby_AC3).ok()?;
+                output.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, RATE as u32).ok()?;
+                output.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, channels).ok()?;
+                output.SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, kbps * 125).ok()?;
+                let input = MFCreateMediaType().ok()?;
+                input.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio).ok()?;
+                input.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_Float).ok()?;
+                input.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, RATE as u32).ok()?;
+                input.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, channels).ok()?;
+                input.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 32).ok()?;
+                input.SetUINT32(&MF_MT_AUDIO_BLOCK_ALIGNMENT, channels * 4).ok()?;
+                input.SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, RATE as u32 * channels * 4).ok()?;
+                input.SetUINT32(&MF_MT_AUDIO_CHANNEL_MASK, mask).ok()?;
+                input.SetUINT32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1).ok()?;
+                if mft.SetOutputType(0, &output, 0).is_err() || mft.SetInputType(0, &input, 0).is_err() {
+                    mft.SetInputType(0, &input, 0).ok()?;
+                    mft.SetOutputType(0, &output, 0).ok()?;
+                }
+                let info = mft.GetOutputStreamInfo(0).ok()?;
+                let provides = info.dwFlags & (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.0 as u32) != 0;
+                let _ = mft.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0);
+                Some(Self { mft, channels, provides, out_size: info.cbSize.max(8192) })
+            }
+        }
+
+        /// Abtastwerte (verschachtelt) hinein, fertiger Datenstrom hinten an `out`.
+        pub fn encode(&mut self, pcm: &[f32], out: &mut Vec<u8>) {
+            let step = 1536 * self.channels as usize;
+            for chunk in pcm.chunks(step) {
+                let bytes: Vec<u8> = chunk.iter().flat_map(|v| v.to_le_bytes()).collect();
+                unsafe {
+                    let Some(sample) = input_sample(&bytes, None) else { return };
+                    let mut got = Vec::new();
+                    if self.mft.ProcessInput(0, &sample, 0).is_err() {
+                        pull(&self.mft, self.provides, self.out_size, &mut got);
+                        let _ = self.mft.ProcessInput(0, &sample, 0);
+                    }
+                    pull(&self.mft, self.provides, self.out_size, &mut got);
+                    for s in got {
+                        if let Some(b) = sample_bytes(&s) {
+                            out.extend_from_slice(&b);
+                        }
+                    }
+                }
+            }
+        }
+
+        /// Restliche Daten ausgeben.
+        pub fn finish(&mut self, out: &mut Vec<u8>) {
+            unsafe {
+                let _ = self.mft.ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0);
+                let mut got = Vec::new();
+                pull(&self.mft, self.provides, self.out_size, &mut got);
+                for s in got {
+                    if let Some(b) = sample_bytes(&s) {
+                        out.extend_from_slice(&b);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+pub use mf::{MfDecoder, MfEncoder};
+
+/// Teilt einen AC-3-Strom in Rahmen (Anfang, Länge).
+pub fn ac3_frames(d: &[u8]) -> Vec<(usize, usize)> {
+    split_frames(d, Codec::Ac3)
+}
+
+/// Teilt einen AC-3- oder MPEG-Tonstrom in vollständige Rahmen (Anfang, Länge). Ein
+/// Rahmenanfang zählt nur, wenn danach wieder ein Rahmen beginnt oder der Strom endet.
+pub fn split_frames(d: &[u8], codec: Codec) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let mut pos = 0;
+    while let Some(start) = find_sync(d, pos, codec) {
+        let Some(len) = frame_len(&d[start..], codec).filter(|l| *l > 4) else {
+            pos = start + 1;
+            continue;
+        };
+        if start + len > d.len() {
+            break;
+        }
+        let next_ok = start + len == d.len()
+            || (start + len + 1 < d.len() && find_sync(d, start + len, codec) == Some(start + len));
+        if !next_ok && start + len + 2 <= d.len() {
+            pos = start + 1;
+            continue;
+        }
+        out.push((start, len));
+        pos = start + len;
+    }
+    out
 }

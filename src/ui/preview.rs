@@ -733,12 +733,19 @@ impl App {
         ui.painter().rect_filled(screen, CornerRadius::same(10), p.screen);
 
         // Blende des gezeigten Eintrags als Überlagerung, so wie sie ausgegeben wird
-        let fade_overlay = match (self.preview_sel(), self.disc.as_ref(), self.preview.current_ms()) {
-            (Selection::Entry(i), Some(disc), Some(now)) => self.plan.reauthor.get(i).and_then(|e| {
+        let fade_spec = match (self.preview_sel(), self.disc.as_ref()) {
+            (Selection::Entry(i), Some(disc)) => self.plan.reauthor.get(i).filter(|e| e.fade.is_active()).map(|e| {
                 let total = discslim::engine::plan::entry_duration_ms(disc, e);
                 let (a, b) = e.cut.effective(total);
-                e.fade.at(now as f64, a as f64, b.min(total) as f64)
+                (e.fade, a as f64, b.min(total) as f64)
             }),
+            _ => None,
+        };
+        if let Some(bus) = self.preview.audio.as_ref() {
+            bus.set_fade(fade_spec);
+        }
+        let fade_overlay = match (fade_spec, self.preview.current_ms()) {
+            (Some((f, a, b)), Some(now)) => f.at(now as f64, a, b),
             _ => None,
         };
 

@@ -1,6 +1,7 @@
 //! Planung, Umwandlung und Vorschau.
 
 pub mod audio;
+pub mod audiofade;
 pub mod author;
 pub mod backup;
 pub mod batch;

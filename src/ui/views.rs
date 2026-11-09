@@ -1089,8 +1089,8 @@ impl App {
             });
             ui.label(
                 RichText::new(tr!(
-                    "Die Bilder im Blendenbereich werden neu kodiert. Der Ton wird nicht mit ausgeblendet.",
-                    "Frames within the fade are re-encoded. The audio is not faded."
+                    "Die Bilder im Blendenbereich werden neu kodiert, der Ton wird mit ein- und ausgeblendet.",
+                    "Frames within the fade are re-encoded; the audio fades along with the picture."
                 ))
                 .size(12.5)
                 .color(p.muted),

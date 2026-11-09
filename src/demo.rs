@@ -279,6 +279,9 @@ fn mux_title(spec: &TitleSpec, vob: u16) -> (Vec<Vobu>, Vec<u64>) {
 
         // Ton für die Dauer der GOP
         let wanted_samples = ((frames_total + frames) as f64 / spec.fps * 48_000.0) as u64 - samples_done;
+        // Zeitstempel je Tonpaket: Zeit des ersten Abtastwerts darin
+        let audio_base = samples_done;
+        let audio_pts = move |byte: usize| PTS_OFFSET + (audio_base + (byte / 4) as u64) * 90_000 / 48_000;
         samples_done += wanted_samples;
         let mut tracks: Vec<(usize, Vec<u8>, usize)> =
             gens.iter_mut().enumerate().map(|(i, g)| (i, g.samples(wanted_samples as usize), 0)).collect();
@@ -311,7 +314,7 @@ fn mux_title(spec: &TitleSpec, vob: u16) -> (Vec<Vobu>, Vec<u64>) {
             if count % audio_every == 0 {
                 for t in tracks.iter_mut() {
                     if t.2 < t.1.len() {
-                        let (s, n) = audio_pack(tick(&mut scr90), start_pts, t.0 as u8, &t.1[t.2..]);
+                        let (s, n) = audio_pack(tick(&mut scr90), audio_pts(t.2), t.0 as u8, &t.1[t.2..]);
                         vobu.extend_from_slice(&s);
                         t.2 += n;
                     }
@@ -321,7 +324,7 @@ fn mux_title(spec: &TitleSpec, vob: u16) -> (Vec<Vobu>, Vec<u64>) {
         // Rest des Tons
         for t in tracks.iter_mut() {
             while t.2 < t.1.len() {
-                let (s, n) = audio_pack(tick(&mut scr90), start_pts, t.0 as u8, &t.1[t.2..]);
+                let (s, n) = audio_pack(tick(&mut scr90), audio_pts(t.2), t.0 as u8, &t.1[t.2..]);
                 vobu.extend_from_slice(&s);
                 t.2 += n;
             }

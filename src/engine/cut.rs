@@ -7,6 +7,7 @@ use crate::dvd::model::{Disc, PlayCell};
 use crate::dvd::source::Space;
 use crate::dvd::vob::*;
 use crate::dvd::{be32, put16, put32, Res, SECTOR};
+use crate::engine::audiofade::{fade_audio, FadeVobu};
 use crate::engine::plan::{FadeKind, ReauthorEntry};
 use crate::engine::transcode::VobuReader;
 use crate::mpeg2::bits::next_start_code;
@@ -319,6 +320,11 @@ pub fn entry_stream<'a>(
     let vis_end = cut_out.min(total_ms) as f64;
     let fade_len = fades.duration_ms().min(((vis_end - vis_start) / 2.0).max(1.0));
     let mut after_fade_in = false;
+    // Ton im Blendenbereich: VOBUs werden gesammelt, weil Tonrahmen über VOBU-Grenzen
+    // reichen und der Ton gegenüber dem Bild versetzt gemultiplext ist.
+    const AUDIO_MARGIN_MS: f64 = 1_500.0;
+    let mut held: Vec<(EntryVobu<'a>, f64, u32)> = Vec::new();
+    let audio_gain = move |t: f64| fades.at(t, vis_start, vis_end).map(|(a, _)| a).unwrap_or(1.0);
     let mut cell_base = 0u64;
     let mut out_t = 0u64;
     let mut prev: Option<Vec<u8>> = None;
@@ -393,7 +399,13 @@ pub fn entry_stream<'a>(
                 }
                 first_kept = false;
                 let dur_out = if rebuilt { vobu_dur_ms(&out) } else { dur };
-                sink(StreamEvent::Vobu(EntryVobu {
+                let audio_zone = fades.is_active()
+                    && ((fades.fade_in != FadeKind::None && (t0 as f64) < vis_start + fade_len + AUDIO_MARGIN_MS)
+                        || (fades.fade_out != FadeKind::None && (t1 as f64) > vis_end - fade_len - AUDIO_MARGIN_MS));
+                if !audio_zone {
+                    flush_held(&mut held, &audio_gain, &mut sink)?;
+                }
+                let ev = EntryVobu {
                     title_cell: idx,
                     pc,
                     cell_start,
@@ -402,13 +414,39 @@ pub fn entry_stream<'a>(
                     data: out,
                     out_t0_ms: out_t,
                     dur_ms: dur_out,
-                }))?;
+                };
+                if audio_zone {
+                    held.push((ev, t0 as f64, be32(&data, PCI_OFF + 12)));
+                } else {
+                    sink(StreamEvent::Vobu(ev))?;
+                }
                 cell_start = false;
                 out_t += dur_out;
                 prev = Some(data);
             }
         }
         cell_base += pc.ms;
+    }
+    flush_held(&mut held, &audio_gain, &mut sink)?;
+    Ok(())
+}
+
+/// Blendet den Ton der gesammelten VOBUs und gibt sie weiter.
+fn flush_held<'a>(
+    held: &mut Vec<(EntryVobu<'a>, f64, u32)>,
+    gain: &dyn Fn(f64) -> f32,
+    sink: &mut impl FnMut(StreamEvent<'a>) -> Res<()>,
+) -> Res<()> {
+    if held.is_empty() {
+        return Ok(());
+    }
+    {
+        let mut group: Vec<FadeVobu> =
+            held.iter_mut().map(|(v, t0, s_ptm)| FadeVobu { data: &mut v.data, t0: *t0, s_ptm: *s_ptm }).collect();
+        fade_audio(&mut group, gain);
+    }
+    for (v, _, _) in held.drain(..) {
+        sink(StreamEvent::Vobu(v))?;
     }
     Ok(())
 }

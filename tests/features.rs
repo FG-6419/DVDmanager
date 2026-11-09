@@ -162,6 +162,45 @@ fn brightness(disc: &Disc, title: usize, ms: f64) -> f64 {
     }
 }
 
+/// Pegel (Effektivwert, 16 Bit) der ersten LPCM-Spur je Paket, mit Zeit ab Titelbeginn (ms).
+fn audio_levels(vdir: &Path) -> Vec<(f64, f64)> {
+    use discslim::engine::audio::{audio_pes, Codec, TrackChoice};
+    let track = TrackChoice { phys: 0, codec: Codec::Lpcm, channels: 2 };
+    let mut files: Vec<PathBuf> = std::fs::read_dir(vdir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| {
+            let n = p.file_name().unwrap().to_string_lossy().to_uppercase();
+            n.starts_with("VTS_01_") && n.ends_with(".VOB") && !n.ends_with("_0.VOB")
+        })
+        .collect();
+    files.sort();
+    let mut base: Option<u64> = None;
+    let mut next = 0.0;
+    let mut out = Vec::new();
+    for f in files {
+        let data = std::fs::read(f).unwrap();
+        for s in data.chunks_exact(SECTOR) {
+            if base.is_none() && classify(s) == Stream::Nav {
+                base = Some(u64::from(be32(s, PCI_OFF + 12)));
+            }
+            let Some(p) = audio_pes(s, &track) else { continue };
+            let t = match (p.pts, base) {
+                (Some(pts), Some(b)) => (pts as f64 - b as f64) / 90.0,
+                _ => next,
+            };
+            let vals: Vec<f64> = p.data.chunks_exact(2).map(|c| f64::from(i16::from_be_bytes([c[0], c[1]]))).collect();
+            let n = vals.len() / 2;
+            next = t + n as f64 / 48.0;
+            if n > 0 {
+                let rms = (vals.iter().map(|v| v * v).sum::<f64>() / vals.len() as f64).sqrt();
+                out.push((t + n as f64 / 96.0, rms));
+            }
+        }
+    }
+    out
+}
+
 #[test]
 fn fades_at_cut_points() {
     let w = work("blende");
@@ -194,6 +233,22 @@ fn fades_at_cut_points() {
         assert!(quarter > first + 10.0 && quarter < mid, "Einblenden fehlt: {quarter}");
         assert!((mid - reference).abs() < 12.0, "Mitte verändert: {mid} statt {reference}");
         assert!(end > 200.0, "Ende nicht weiß: {end}");
+        // Ton: still am Anfang und Ende, dazwischen in voller Lautstärke
+        let lv = audio_levels(&vdir);
+        let level = |a: f64, b: f64| {
+            let v: Vec<f64> = lv.iter().filter(|(t, _)| *t >= a && *t < b).map(|x| x.1).collect();
+            assert!(!v.is_empty(), "kein Ton zwischen {a} und {b} ms");
+            (v.iter().map(|x| x * x).sum::<f64>() / v.len() as f64).sqrt()
+        };
+        let a_first = level(0.0, 100.0);
+        let a_ramp = level(600.0, 800.0);
+        let a_mid = level(len / 2.0 - 500.0, len / 2.0 + 500.0);
+        let a_end = level(len - 100.0, len);
+        println!("Ton: Anfang {a_first:.0}, 0,6-0,8 s {a_ramp:.0}, Mitte {a_mid:.0}, Ende {a_end:.0}");
+        assert!(a_first < 300.0, "Ton am Anfang nicht still: {a_first}");
+        assert!(a_ramp > 600.0 && a_ramp < a_mid * 0.75, "Ton blendet nicht ein: {a_ramp}");
+        assert!(a_mid > 2_500.0, "Ton in der Mitte zu leise: {a_mid}");
+        assert!(a_end < 300.0, "Ton am Ende nicht still: {a_end}");
         if exact {
             // Gleich nach dem Einblenden: wie die Quelle, kein Nachflackern
             for t in [1_560.0, 1_620.0, 1_700.0, 2_100.0] {
