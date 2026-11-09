@@ -989,13 +989,25 @@ impl App {
         section(ui, &p, ic::SCISSORS, "SCHNITT");
         let cut = &mut self.plan.reauthor[i].cut;
         let mut changed = false;
-        for (label, value, empty) in [("Anfang", &mut cut.start_ms, "Titelanfang"), ("Ende", &mut cut.end_ms, "Titelende")] {
+        let mut seek: Option<u64> = None;
+        for (label, value, empty, fallback) in
+            [("Anfang", &mut cut.start_ms, "Titelanfang", 0), ("Ende", &mut cut.end_ms, "Titelende", total.saturating_sub(40))]
+        {
             ui.horizontal(|ui| {
                 ui.add_sized([52.0, 24.0], egui::Label::new(RichText::new(label).color(p.muted)));
                 let text = value.map(fmt_time_precise).unwrap_or_else(|| empty.to_string());
                 ui.add_sized([86.0, 24.0], egui::Label::new(RichText::new(text).family(semibold())));
+                // Zur Marke springen (ohne Marke: Titelanfang bzw. letztes Bild)
+                let jump = egui::Button::new(RichText::new(ic::ARROW_LINE_RIGHT).size(15.0).color(p.text))
+                    .fill(Color32::TRANSPARENT)
+                    .stroke(Stroke::NONE)
+                    .corner_radius(CornerRadius::same(6))
+                    .min_size(Vec2::new(28.0, 28.0));
+                if ui.add(jump).on_hover_text("In der Vorschau zu dieser Schnittmarke springen").clicked() {
+                    seek = Some(value.unwrap_or(fallback));
+                }
                 let b = ui
-                    .add_enabled(now.is_some(), egui::Button::new(RichText::new(format!("{}  Hier", ic::MAP_PIN)).size(13.0)))
+                    .add_enabled(now.is_some(), egui::Button::new(RichText::new(ic::MAP_PIN).size(15.0)).min_size(Vec2::new(30.0, 26.0)))
                     .on_hover_text("Setzt die Marke auf das Bild, das die Vorschau gerade zeigt");
                 if b.clicked() {
                     *value = now;
@@ -1007,6 +1019,11 @@ impl App {
                 }
             });
         }
+        if let Some(t) = seek {
+            self.preview.pause();
+            self.preview.seek_time(t.min(total) as f64, true);
+        }
+        let cut = &mut self.plan.reauthor[i].cut;
         if let (Some(a), Some(b)) = (cut.start_ms, cut.end_ms) {
             if b <= a {
                 cut.end_ms = None;
@@ -1101,7 +1118,7 @@ impl App {
                 ui.horizontal(|ui| {
                     row(ui, k + 2, *m, outside);
                     ui.spacing_mut().item_spacing.x = 0.0;
-                    if mini(ui, ic::PLAY, "In der Vorschau zu dieser Marke springen") {
+                    if mini(ui, ic::ARROW_LINE_RIGHT, "In der Vorschau zu dieser Marke springen") {
                         seek = Some(*m);
                     }
                     if mini(ui, ic::CARET_LEFT, "Eine Sekunde früher") {
