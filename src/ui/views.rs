@@ -11,7 +11,7 @@ use discslim::dvd::model::{fmt_time, Category, CellStats, Disc};
 use discslim::engine::plan::{
     entry_duration_ms, entry_kept_fraction, Cut,
     dvd5_sectors, dvd9_sectors, fmt_size, reauthor_cells, Estimate, ItemId, Mode, ReauthorEntry,
-    Smoothing, VideoMode, MIN_CHAPTER_GAP_MS,
+    Smoothing, VideoMode, MIN_CHAPTER_GAP_MS, FadeKind,
 };
 
 use super::style::{self, card, item_row, legend, primary_button, section, segmented, semibold, soft_button};
@@ -1045,6 +1045,57 @@ impl App {
             ui.label(RichText::new(trf!("Länge nach dem Schnitt: {}", "Length after cut: {}", fmt_time(len))).size(13.0));
         }
         let _ = changed;
+        ui.add_space(4.0);
+        self.view_fades(ui, i);
+    }
+
+    /// Blenden am Anfang und Ende eines Eintrags: keine, aus/nach Schwarz oder Weiß.
+    fn view_fades(&mut self, ui: &mut Ui, i: usize) {
+        let p = self.pal;
+        let kinds = [
+            (FadeKind::None, tr!("Keine", "None")),
+            (FadeKind::Black, tr!("Schwarz", "Black")),
+            (FadeKind::White, tr!("Weiß", "White")),
+        ];
+        let Some(e) = self.plan.reauthor.get_mut(i) else { return };
+        let fade = &mut e.fade;
+        ui.label(RichText::new(tr!("Blende", "Fade")).family(semibold()).size(13.0).color(p.muted));
+        for (label, value, id) in [
+            (tr!("Einblenden", "Fade in"), &mut fade.fade_in, "blende-an"),
+            (tr!("Ausblenden", "Fade out"), &mut fade.fade_out, "blende-ab"),
+        ] {
+            ui.horizontal(|ui| {
+                ui.add_sized([86.0, 24.0], egui::Label::new(RichText::new(label).color(p.muted)));
+                let current = kinds.iter().find(|k| k.0 == *value).map(|k| k.1).unwrap_or("");
+                egui::ComboBox::from_id_salt(id).width(110.0).selected_text(current).show_ui(ui, |ui| {
+                    for (k, name) in kinds {
+                        ui.selectable_value(value, k, name);
+                    }
+                });
+            });
+        }
+        if fade.is_active() {
+            ui.horizontal(|ui| {
+                ui.add_sized([86.0, 24.0], egui::Label::new(RichText::new(tr!("Dauer", "Duration")).color(p.muted)));
+                let mut secs = fade.duration_ms() / 1000.0;
+                let dv = egui::DragValue::new(&mut secs)
+                    .range(0.2..=5.0)
+                    .speed(0.05)
+                    .custom_formatter(|v, _| discslim::i18n::decimal(format!("{v:.1} s")))
+                    .custom_parser(|s| s.trim().trim_end_matches('s').trim().replace(',', ".").parse().ok());
+                if ui.add(dv).changed() {
+                    fade.ms = (secs * 1000.0).round() as u32;
+                }
+            });
+            ui.label(
+                RichText::new(tr!(
+                    "Die Bilder im Blendenbereich werden neu kodiert. Der Ton wird nicht mit ausgeblendet.",
+                    "Frames within the fade are re-encoded. The audio is not faded."
+                ))
+                .size(12.5)
+                .color(p.muted),
+            );
+        }
         ui.add_space(4.0);
     }
 

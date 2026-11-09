@@ -814,6 +814,24 @@ impl App {
                 self.preview.dirty = true;
             }
             ("cutview", 60) => self.preview.cut_view = true,
+            ("fade", 5) => {
+                // Schnitt mit Blenden; die Vorschau steht mitten im Einblenden
+                self.plan.mode = Mode::Reauthor;
+                if let Some(d) = self.disc.clone() {
+                    let t = &d.titles[0];
+                    let mut e = discslim::engine::plan::ReauthorEntry::new(0, 0, t.chapters.len().saturating_sub(1), Default::default());
+                    e.cut = discslim::engine::plan::Cut { start_ms: Some(8_000), end_ms: Some(41_500), exact: true };
+                    e.fade = discslim::engine::plan::Fades {
+                        fade_in: discslim::engine::plan::FadeKind::Black,
+                        fade_out: discslim::engine::plan::FadeKind::White,
+                        ms: 1_500,
+                    };
+                    self.plan.reauthor.push(e);
+                }
+                self.sel = Selection::Entry(0);
+                self.preview.dirty = true;
+            }
+            ("fade", 40) => self.preview.seek_time(8_600.0, true),
             ("split", 5) => {
                 // Titel 1 nach Kapiteln zerlegen und ohne Größengrenze anzeigen
                 if let Some(d) = self.disc.clone() {

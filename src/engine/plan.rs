@@ -135,6 +135,61 @@ pub struct ReauthorEntry {
     /// steht nicht in der Liste. `None`: die Kapitel der DVD bleiben.
     #[serde(default)]
     pub chapter_marks: Option<Vec<u64>>,
+    /// Ein- und Ausblenden am Anfang und Ende des Eintrags
+    #[serde(default)]
+    pub fade: Fades,
+}
+
+/// Art einer Blende.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FadeKind {
+    #[default]
+    None,
+    /// Aus Schwarz einblenden bzw. nach Schwarz abblenden
+    Black,
+    /// Aus Weiß bzw. nach Weiß
+    White,
+}
+
+/// Blenden eines Eintrags.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Fades {
+    pub fade_in: FadeKind,
+    pub fade_out: FadeKind,
+    /// Dauer jeder Blende in Millisekunden (0 = Standard)
+    pub ms: u32,
+}
+
+/// Standarddauer einer Blende.
+pub const FADE_DEFAULT_MS: u32 = 1_000;
+
+impl Fades {
+    pub fn is_active(&self) -> bool {
+        self.fade_in != FadeKind::None || self.fade_out != FadeKind::None
+    }
+
+    pub fn duration_ms(&self) -> f64 {
+        f64::from(if self.ms == 0 { FADE_DEFAULT_MS } else { self.ms })
+    }
+
+    /// Sichtbarkeit des Bildes (1 = voll, 0 = ganz Schwarz/Weiß) und Zielfarbe an einer
+    /// Stelle `t` der Zeitachse des Eintrags, wenn der sichtbare Bereich `start..end` ist.
+    /// `None`, wenn dort keine Blende wirkt.
+    pub fn at(&self, t: f64, start: f64, end: f64) -> Option<(f32, FadeKind)> {
+        let d = self.duration_ms().min(((end - start) / 2.0).max(1.0));
+        let mut out: Option<(f32, FadeKind)> = None;
+        if self.fade_in != FadeKind::None && t < start + d {
+            let a = ((t - start) / d).clamp(0.0, 1.0) as f32;
+            out = Some((a, self.fade_in));
+        }
+        if self.fade_out != FadeKind::None && t > end - d {
+            let a = ((end - t) / d).clamp(0.0, 1.0) as f32;
+            if out.is_none_or(|o| a < o.0) {
+                out = Some((a, self.fade_out));
+            }
+        }
+        out
+    }
 }
 
 /// Mindestabstand zwischen zwei Kapitelmarken.
@@ -142,7 +197,7 @@ pub const MIN_CHAPTER_GAP_MS: u64 = 1_000;
 
 impl ReauthorEntry {
     pub fn new(title: usize, first_chapter: usize, last_chapter: usize, settings: ItemSettings) -> Self {
-        Self { title, first_chapter, last_chapter, settings, cut: Cut::default(), chapter_marks: None }
+        Self { title, first_chapter, last_chapter, settings, cut: Cut::default(), chapter_marks: None, fade: Fades::default() }
     }
 
     /// Kapitelanfänge der DVD im gewählten Bereich (ohne das erste Kapitel), auf der
@@ -311,6 +366,7 @@ impl Plan {
                     settings: self.settings(ItemId::Title(i)),
                     cut: Cut::default(),
                     chapter_marks: None,
+                    fade: Fades::default(),
                 })
                 .collect(),
             Mode::Reauthor => self

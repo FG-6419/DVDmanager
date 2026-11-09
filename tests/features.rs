@@ -145,6 +145,66 @@ fn custom_chapter_marks() {
     assert_eq!(re.titles[0].chapters.len(), t.chapters.len());
 }
 
+/// Mittlere Helligkeit (0..255) des Bildes an einer Stelle eines Titels.
+fn brightness(disc: &Disc, title: usize, ms: f64) -> f64 {
+    use discslim::engine::preview::{self, PreviewCmd};
+    let last = disc.titles[title].chapters.len() - 1;
+    let seg = preview::title_segments(disc, title, 0, last);
+    let h = preview::spawn(disc.source.clone(), seg, 0.0, None, 0, None);
+    h.cmd.send(PreviewCmd::SeekTime { ms, exact: true, id: 1 }).unwrap();
+    loop {
+        let f = h.frames.recv_timeout(std::time::Duration::from_secs(10)).expect("kein Bild");
+        if f.seek_id == 1 && !f.eos {
+            let px = f.rgba.chunks_exact(4);
+            let n = px.len() as f64;
+            return px.map(|c| (u32::from(c[0]) + u32::from(c[1]) + u32::from(c[2])) as f64 / 3.0).sum::<f64>() / n;
+        }
+    }
+}
+
+#[test]
+fn fades_at_cut_points() {
+    let w = work("blende");
+    let src = demo::build_sample(&w, |_| {}).unwrap();
+    let disc = open_analysed(&src);
+    let ti = longest_title(&disc);
+    let last = disc.titles[ti].chapters.len() - 1;
+    let (cut_in, cut_out) = (4_000u64, 20_000u64);
+
+    for exact in [true, false] {
+        let mut e = ReauthorEntry::new(ti, 0, last, ItemSettings::default());
+        e.cut = Cut { start_ms: Some(cut_in), end_ms: Some(cut_out), exact };
+        e.fade = Fades { fade_in: FadeKind::Black, fade_out: FadeKind::White, ms: 1_500 };
+        let mut plan = Plan::new(NO_TARGET);
+        plan.mode = Mode::Reauthor;
+        plan.reauthor.push(e);
+        let out = w.join(format!("blende_{exact}"));
+        run_backup(open_analysed(&src), plan, Output::Folder(out.clone()));
+        let vdir = out.join("VIDEO_TS");
+        check_cells(&vdir);
+        let re = open_analysed(&vdir);
+        let len = re.titles[0].ms as f64;
+        let first = brightness(&re, 0, 0.0);
+        let quarter = brightness(&re, 0, 600.0);
+        let mid = brightness(&re, 0, len / 2.0);
+        let end = brightness(&re, 0, len - 60.0);
+        let reference = brightness(&disc, ti, cut_in as f64 + len / 2.0);
+        println!("bildgenau={exact}: Anfang {first:.0}, nach 0,6 s {quarter:.0}, Mitte {mid:.0} (Quelle {reference:.0}), Ende {end:.0}");
+        assert!(first < 30.0, "Anfang nicht schwarz: {first}");
+        assert!(quarter > first + 10.0 && quarter < mid, "Einblenden fehlt: {quarter}");
+        assert!((mid - reference).abs() < 12.0, "Mitte verändert: {mid} statt {reference}");
+        assert!(end > 200.0, "Ende nicht weiß: {end}");
+        if exact {
+            // Gleich nach dem Einblenden: wie die Quelle, kein Nachflackern
+            for t in [1_560.0, 1_620.0, 1_700.0, 2_100.0] {
+                let got = brightness(&re, 0, t);
+                let want = brightness(&disc, ti, cut_in as f64 + t);
+                assert!((got - want).abs() < 6.0, "nach der Blende bei {t} ms: {got} statt {want}");
+            }
+        }
+    }
+}
+
 #[test]
 fn project_file_round_trip() {
     let w = work("projekt");

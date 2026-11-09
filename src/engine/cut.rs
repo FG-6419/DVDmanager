@@ -7,7 +7,7 @@ use crate::dvd::model::{Disc, PlayCell};
 use crate::dvd::source::Space;
 use crate::dvd::vob::*;
 use crate::dvd::{be32, put16, put32, Res, SECTOR};
-use crate::engine::plan::ReauthorEntry;
+use crate::engine::plan::{FadeKind, ReauthorEntry};
 use crate::engine::transcode::VobuReader;
 use crate::mpeg2::bits::next_start_code;
 use crate::mpeg2::decode::{Decoder, FrameClock};
@@ -82,6 +82,39 @@ fn pes_pts(s: &[u8]) -> Option<u64> {
 /// Baut eine VOBU neu, in der nur die Bilder ab `from_ms` und vor `until_ms` (relativ
 /// zum Beginn der VOBU) bleiben. Liefert `None`, wenn kein Bild übrig bleibt.
 pub fn rebuild_vobu(prev: Option<&[u8]>, data: &[u8], from_ms: Option<f64>, until_ms: Option<f64>) -> Res<Option<Vec<u8>>> {
+    rebuild_vobu_with(prev, data, from_ms, until_ms, None)
+}
+
+/// Blende für ein Bild: Zeit relativ zum Beginn der VOBU (ms) -> Sichtbarkeit und Zielfarbe.
+pub type FadeFn<'a> = &'a dyn Fn(f64) -> Option<(f32, FadeKind)>;
+
+/// Blendet ein dekodiertes Bild Richtung Schwarz oder Weiß (Sichtbarkeit `a`, 1 = unverändert).
+pub fn apply_fade(f: &mut crate::mpeg2::decode::DecodedFrame, a: f32, kind: FadeKind) {
+    let target = match kind {
+        FadeKind::None => return,
+        FadeKind::Black => 16.0,
+        FadeKind::White => 235.0,
+    };
+    let a = a.clamp(0.0, 1.0);
+    if a >= 0.999 {
+        return;
+    }
+    for p in f.y.iter_mut() {
+        *p = (target + (f32::from(*p) - target) * a).round().clamp(0.0, 255.0) as u8;
+    }
+    for p in f.u.iter_mut().chain(f.v.iter_mut()) {
+        *p = (128.0 + (f32::from(*p) - 128.0) * a).round().clamp(0.0, 255.0) as u8;
+    }
+}
+
+/// Wie `rebuild_vobu`, dazu auf Wunsch eine Blende je Bild.
+pub fn rebuild_vobu_with(
+    prev: Option<&[u8]>,
+    data: &[u8],
+    from_ms: Option<f64>,
+    until_ms: Option<f64>,
+    fade: Option<FadeFn>,
+) -> Res<Option<Vec<u8>>> {
     let es = video_es(data);
     let mut dec = Decoder::new();
     if let Some(p) = prev {
@@ -112,7 +145,18 @@ pub fn rebuild_vobu(prev: Option<&[u8]>, data: &[u8], from_ms: Option<f64>, unti
     }
     let seq = dec.seq.clone();
     let budget = ((es.len() as f64 * kept.len() as f64 / total as f64) as usize).max(kept.len() * 6_000);
-    let refs: Vec<&crate::mpeg2::decode::DecodedFrame> = kept.iter().map(|(_, f)| f).collect();
+    // Blende: nur die betroffenen Bilder werden kopiert und verändert
+    let faded: Vec<Option<crate::mpeg2::decode::DecodedFrame>> = kept
+        .iter()
+        .map(|(t, f)| {
+            let (a, kind) = fade.and_then(|g| g(*t))?;
+            let mut c = f.clone();
+            apply_fade(&mut c, a, kind);
+            Some(c)
+        })
+        .collect();
+    let refs: Vec<&crate::mpeg2::decode::DecodedFrame> =
+        kept.iter().zip(&faded).map(|((_, f), c)| c.as_ref().unwrap_or(f)).collect();
     let enc = encode_frames(&seq, &refs, budget);
 
     // Zeitstempel: Anzeige wie im Original, Dekodierung jeweils ein Bild früher.
@@ -268,6 +312,13 @@ pub fn entry_stream<'a>(
     let end_idx = t.chapters.get(entry.last_chapter + 1).map(|c| c.first_cell_idx).unwrap_or(t.cells.len());
     let (cut_in, cut_out) = entry.cut.effective(crate::engine::plan::entry_duration_ms(disc, entry));
     let exact = entry.cut.exact;
+    // Sichtbarer Bereich und Länge der Blenden (Zeitachse des Eintrags)
+    let fades = entry.fade;
+    let total_ms = crate::engine::plan::entry_duration_ms(disc, entry);
+    let vis_start = cut_in as f64;
+    let vis_end = cut_out.min(total_ms) as f64;
+    let fade_len = fades.duration_ms().min(((vis_end - vis_start) / 2.0).max(1.0));
+    let mut after_fade_in = false;
     let mut cell_base = 0u64;
     let mut out_t = 0u64;
     let mut prev: Option<Vec<u8>> = None;
@@ -309,11 +360,22 @@ pub fn entry_stream<'a>(
                 }
                 let head = exact && cut_in > t0 && cut_in < t1;
                 let tail = exact && cut_out > t0 && cut_out < t1;
+                // Blenden: Bildgruppen im Blendenbereich werden neu kodiert. Nach dem
+                // Einblenden auch noch die nächste, damit sie sich nicht auf ein
+                // abgedunkeltes Bild davor bezieht.
+                let in_fade = fades.is_active()
+                    && ((fades.fade_in != FadeKind::None && (t0 as f64) < vis_start + fade_len)
+                        || (fades.fade_out != FadeKind::None && (t1 as f64) > vis_end - fade_len));
+                let settle = !in_fade && after_fade_in;
+                after_fade_in = in_fade && fades.fade_in != FadeKind::None && (t0 as f64) < vis_start + fade_len;
                 let mut item = None;
-                if head || tail {
+                if head || tail || in_fade || settle {
                     let from = head.then(|| (cut_in - t0) as f64);
                     let until = tail.then(|| (cut_out - t0) as f64);
-                    match rebuild_vobu(prev.as_deref(), &data, from, until) {
+                    let t0f = t0 as f64;
+                    let fade_fn = move |t: f64| fades.at(t0f + t, vis_start, vis_end);
+                    let fade: Option<FadeFn> = if in_fade { Some(&fade_fn) } else { None };
+                    match rebuild_vobu_with(prev.as_deref(), &data, from, until, fade) {
                         Ok(Some(d)) => item = Some(d),
                         Ok(None) => {
                             sink(StreamEvent::Skipped(in_sectors))?;

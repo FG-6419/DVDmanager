@@ -732,6 +732,16 @@ impl App {
         let (screen, _) = ui.allocate_exact_size(Vec2::new(avail.x, screen_h), Sense::hover());
         ui.painter().rect_filled(screen, CornerRadius::same(10), p.screen);
 
+        // Blende des gezeigten Eintrags als Überlagerung, so wie sie ausgegeben wird
+        let fade_overlay = match (self.preview_sel(), self.disc.as_ref(), self.preview.current_ms()) {
+            (Selection::Entry(i), Some(disc), Some(now)) => self.plan.reauthor.get(i).and_then(|e| {
+                let total = discslim::engine::plan::entry_duration_ms(disc, e);
+                let (a, b) = e.cut.effective(total);
+                e.fade.at(now as f64, a as f64, b.min(total) as f64)
+            }),
+            _ => None,
+        };
+
         let st = &mut self.preview;
         if let (Some(tex), true) = (st.texture.as_ref(), st.has_frame) {
             let aspect = if st.aspect > 0.1 { st.aspect } else { 4.0 / 3.0 };
@@ -746,6 +756,16 @@ impl App {
                 Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                 Color32::WHITE,
             );
+            if let Some((a, kind)) = fade_overlay {
+                let cover = ((1.0 - a).clamp(0.0, 1.0) * 255.0) as u8;
+                let c = match kind {
+                    discslim::engine::plan::FadeKind::White => Color32::from_rgba_unmultiplied(235, 235, 235, cover),
+                    _ => Color32::from_rgba_unmultiplied(16, 16, 16, cover),
+                };
+                if cover > 0 {
+                    ui.painter().rect_filled(rect, CornerRadius::ZERO, c);
+                }
+            }
         } else {
             let text = if st.segments.is_empty() { tr!("Für diese Auswahl gibt es keine Vorschau", "No preview is available for this selection") } else { tr!("Vorschau wird geladen …", "Loading preview …") };
             ui.painter().text(
