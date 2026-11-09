@@ -412,6 +412,12 @@ fn author_entry(
     let mut cell_new = 0u8;
     let mut last_src_vob = None;
     let trimmed = entry.cut.is_trim(crate::engine::plan::entry_duration_ms(disc, entry));
+    // Eigene Kapitelmarken (Zeitachse der Ausgabe). An jeder Marke beginnt eine neue
+    // Zelle und ein neues Programm, auf eine VOBU (etwa eine halbe Sekunde) genau.
+    let marks = entry.output_marks(disc);
+    let mut next_mark = 0usize;
+    // Zeiten in der Zelle neu zählen, sobald Zellen nicht mehr denen der DVD entsprechen.
+    let retime = trimmed || marks.is_some();
     let pal = v.video.pal;
     // Offene Zelle: (PGC, Zelle in der PGC, erster Sektor, letzte VOBU, gemessene Dauer, Dauer laut Tabelle)
     let mut open: Option<(usize, usize, u32, u32, u64, u64)> = None;
@@ -427,7 +433,7 @@ fn author_entry(
             if new_pos == first {
                 return;
             }
-            let ms = if trimmed { measured } else { table_ms };
+            let ms = if retime { measured } else { table_ms };
             let offset = v.pgcs.get(pgc_idx).map(|p| p.offset).unwrap_or(0);
             cells_out.push(ACell {
                 ms,
@@ -453,7 +459,18 @@ fn author_entry(
             }
             StreamEvent::Vobu(item) => item,
         };
-        if item.cell_start {
+        let mut mark_hit = false;
+        if let Some(m) = &marks {
+            while next_mark < m.len() && m[next_mark] <= item.out_t0_ms {
+                next_mark += 1;
+                mark_hit = true;
+            }
+            // Eine Marke in der allerersten VOBU fällt mit Kapitel 1 zusammen.
+            if open.is_none() && cells_out.is_empty() {
+                mark_hit = false;
+            }
+        }
+        if item.cell_start || mark_hit {
             close(&mut open, &mut cells_out, &mut cell_addrs, &mut elapsed_base, new_pos, vob_new, cell_new);
             if cells_out.len() >= 255 {
                 return Err("Der Titel hat zu viele Zellen für eine einzelne Programmkette.".into());
@@ -464,14 +481,21 @@ fn author_entry(
                 last_src_vob = Some(item.pc.vob_id);
             }
             cell_new += 1;
-            if t.chapters.iter().any(|c| c.first_cell_idx == item.title_cell) || pgc.programs.is_empty() {
+            let new_program = match &marks {
+                Some(_) => mark_hit,
+                None => t.chapters.iter().any(|c| c.first_cell_idx == item.title_cell),
+            };
+            if new_program || pgc.programs.is_empty() {
+                if pgc.programs.len() >= 99 {
+                    return Err("Ein Titel kann höchstens 99 Kapitel haben.".into());
+                }
                 pgc.programs.push((cells_out.len() + 1) as u8);
             }
             rq.new_cell();
             open = Some((item.pc.pgc, item.pc.cell_idx, new_pos, new_pos, 0, item.pc.ms));
         }
         let mut data = item.data;
-        if trimmed {
+        if retime {
             // Nach dem Schnitt zählt die Zeit in der Zelle neu.
             let in_cell = item.out_t0_ms.saturating_sub(elapsed_base);
             data[DSI_OFF + 28..DSI_OFF + 32].copy_from_slice(&encode_time(in_cell, pal));
@@ -485,7 +509,7 @@ fn author_entry(
         let start = item.start as u32;
         map.vobus.push((start, start + in_sectors - 1, new_pos, new_pos + out_sectors - 1));
         admap.push(new_pos);
-        let at = if trimmed { item.out_t0_ms } else { elapsed_base + Nav::cell_elapsed_ms(&data) };
+        let at = if retime { item.out_t0_ms } else { elapsed_base + Nav::cell_elapsed_ms(&data) };
         time_points.push((at, new_pos));
         if let Some(o) = open.as_mut() {
             o.3 = new_pos;

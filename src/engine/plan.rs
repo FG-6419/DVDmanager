@@ -3,6 +3,8 @@
 
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::dvd::model::{CellKey, CellStats, Disc};
 use crate::dvd::source::Space;
 use crate::dvd::SECTOR;
@@ -15,7 +17,7 @@ pub const NO_TARGET: u64 = 1 << 40;
 /// Reserve gegen Abweichungen beim Verkleinern.
 pub const SAFETY: f64 = 0.992;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum VideoMode {
     /// Unverändert übernehmen
     Keep,
@@ -27,7 +29,7 @@ pub enum VideoMode {
     Still,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Smoothing {
     Off,
     Low,
@@ -55,14 +57,14 @@ impl Smoothing {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ItemId {
     Title(usize),
     Menu(u8),
     Unused(u8),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ItemSettings {
     pub video: VideoMode,
     pub smoothing: Smoothing,
@@ -77,7 +79,7 @@ impl Default for ItemSettings {
 }
 
 /// Schnitt innerhalb eines Eintrags. Zeiten zählen ab dem Beginn des ersten gewählten Kapitels.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Cut {
     pub start_ms: Option<u64>,
     pub end_ms: Option<u64>,
@@ -120,7 +122,7 @@ impl Cut {
 pub const CUT_EDGE_MS: u64 = 20;
 
 /// Ein Eintrag beim Neu-Zusammenstellen.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReauthorEntry {
     pub title: usize,
     pub first_chapter: usize,
@@ -128,15 +130,70 @@ pub struct ReauthorEntry {
     pub last_chapter: usize,
     pub settings: ItemSettings,
     pub cut: Cut,
+    /// Eigene Kapitelmarken (Millisekunden, gleiche Zeitachse wie der Schnitt, also ab
+    /// dem Beginn des ersten gewählten Kapitels). Kapitel 1 beginnt immer am Anfang und
+    /// steht nicht in der Liste. `None`: die Kapitel der DVD bleiben.
+    #[serde(default)]
+    pub chapter_marks: Option<Vec<u64>>,
 }
+
+/// Mindestabstand zwischen zwei Kapitelmarken.
+pub const MIN_CHAPTER_GAP_MS: u64 = 1_000;
 
 impl ReauthorEntry {
     pub fn new(title: usize, first_chapter: usize, last_chapter: usize, settings: ItemSettings) -> Self {
-        Self { title, first_chapter, last_chapter, settings, cut: Cut::default() }
+        Self { title, first_chapter, last_chapter, settings, cut: Cut::default(), chapter_marks: None }
+    }
+
+    /// Kapitelanfänge der DVD im gewählten Bereich (ohne das erste Kapitel), auf der
+    /// Zeitachse des Eintrags.
+    pub fn original_marks(&self, disc: &Disc) -> Vec<u64> {
+        let Some(t) = disc.titles.get(self.title) else { return Vec::new() };
+        let base = t.chapters.get(self.first_chapter).map(|c| c.start_ms).unwrap_or(0);
+        t.chapters
+            .iter()
+            .take(self.last_chapter + 1)
+            .skip(self.first_chapter + 1)
+            .map(|c| c.start_ms.saturating_sub(base))
+            .collect()
+    }
+
+    /// Sortiert, entfernt doppelte und zu dicht liegende Marken sowie Marken am Anfang.
+    pub fn normalize_marks(marks: &mut Vec<u64>) {
+        marks.sort_unstable();
+        let mut out: Vec<u64> = Vec::with_capacity(marks.len());
+        for &m in marks.iter() {
+            let last = out.last().copied().unwrap_or(0);
+            if m >= MIN_CHAPTER_GAP_MS && m >= last + MIN_CHAPTER_GAP_MS {
+                out.push(m);
+            }
+        }
+        *marks = out;
+    }
+
+    /// Eigene Kapitelmarken auf der Zeitachse der Ausgabe (nach dem Schnitt).
+    /// Marken außerhalb des geschnittenen Bereichs entfallen.
+    pub fn output_marks(&self, disc: &Disc) -> Option<Vec<u64>> {
+        let marks = self.chapter_marks.as_ref()?;
+        let total = entry_duration_ms(disc, self);
+        let (start, end) = self.cut.effective(total);
+        let end = end.min(total);
+        let mut out: Vec<u64> =
+            marks.iter().filter(|m| **m > start && **m < end).map(|m| m - start).collect();
+        Self::normalize_marks(&mut out);
+        Some(out)
+    }
+
+    /// Anzahl der Kapitel, die der Eintrag in der neuen DVD hat.
+    pub fn chapter_count(&self, disc: &Disc) -> usize {
+        match self.output_marks(disc) {
+            Some(m) => m.len() + 1,
+            None => self.last_chapter + 1 - self.first_chapter.min(self.last_chapter),
+        }
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Mode {
     FullDisc,
     Reauthor,
@@ -253,6 +310,7 @@ impl Plan {
                     last_chapter: t.chapters.len().saturating_sub(1),
                     settings: self.settings(ItemId::Title(i)),
                     cut: Cut::default(),
+                    chapter_marks: None,
                 })
                 .collect(),
             Mode::Reauthor => self
@@ -274,6 +332,27 @@ impl Plan {
 
     pub fn settings(&self, id: ItemId) -> ItemSettings {
         self.items.get(&id).cloned().unwrap_or(ItemSettings { video: self.default_video, ..Default::default() })
+    }
+
+    /// Behält in allen Titeln nur Ton und Untertitel einer Sprache, sofern es sie gibt.
+    pub fn keep_only_language(&mut self, disc: &Disc, lang: &str) {
+        for (i, t) in disc.titles.iter().enumerate() {
+            let id = ItemId::Title(i);
+            let mut s = self.settings(id);
+            if t.audio.iter().any(|a| a.attr.lang == lang) {
+                for a in &t.audio {
+                    s.audio[a.phys as usize] = a.attr.lang == lang;
+                }
+            }
+            if t.subs.iter().any(|a| a.attr.lang == lang) {
+                for a in &t.subs {
+                    for p in &a.phys {
+                        s.subs[*p as usize] = a.attr.lang == lang;
+                    }
+                }
+            }
+            self.items.insert(id, s);
+        }
     }
 
     /// Entscheidung für eine Zelle im Ganze-DVD-Modus.

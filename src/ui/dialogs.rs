@@ -12,13 +12,15 @@ use egui_phosphor::regular as ic;
 use discslim::dvd::ifo::lang_name;
 use discslim::dvd::model::{fmt_time, Category, Disc};
 use discslim::engine::backup::{self, BackupRequest, Output};
+use discslim::engine::batch::{BatchItem, PlanSource};
 use discslim::engine::plan::{fmt_size, Mode, Plan};
+use discslim::engine::project::Fingerprint;
 
 use super::style::{self, primary_button, segmented, semibold, soft_button};
 use super::{App, BackupDialog, Job, JobResult, OutputKind};
 
 /// Modales Fenster mit abgedunkeltem Hintergrund.
-fn modal(ctx: &egui::Context, p: &style::Pal, id: &str, width: f32, add: impl FnOnce(&mut Ui)) {
+pub(super) fn modal(ctx: &egui::Context, p: &style::Pal, id: &str, width: f32, add: impl FnOnce(&mut Ui)) {
     let frame = egui::Frame::new()
         .fill(p.card)
         .stroke(Stroke::new(1.0, p.line))
@@ -78,7 +80,7 @@ fn fmt_duration(secs: f64) -> String {
     }
 }
 
-fn progress_bar(ui: &mut Ui, p: &style::Pal, f: f32) {
+pub(super) fn progress_bar(ui: &mut Ui, p: &style::Pal, f: f32) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 10.0), egui::Sense::hover());
     ui.painter().rect_filled(rect, CornerRadius::same(5), p.track);
     let fill = egui::Rect::from_min_size(rect.min, Vec2::new(rect.width() * f.clamp(0.0, 1.0), rect.height()));
@@ -164,6 +166,7 @@ impl App {
         }
 
         self.dialog_backup(ctx);
+        self.dialog_queue(ctx);
         self.dialog_job(ctx);
         self.dialog_result(ctx);
         self.dialog_settings(ctx);
@@ -177,6 +180,7 @@ impl App {
         let p = self.pal;
         let Some(disc) = self.disc.clone() else { return };
         let mut start = false;
+        let mut enqueue = false;
         let mut close = false;
         let dlg = self.backup_dlg.as_mut().unwrap();
         modal(ctx, &p, "backup", 560.0, |ui| {
@@ -356,6 +360,17 @@ impl App {
                 if primary_button(ui, &p, &format!("{}  Backup starten", ic::PLAY), ok).clicked() {
                     start = true;
                 }
+                // Die Warteschlange prüft den Platz erst, wenn sie den Eintrag abarbeitet.
+                let q = ui
+                    .add_enabled(path_ok, egui::Button::new(RichText::new(format!("{}  Zur Warteschlange", ic::QUEUE)).size(14.0).color(p.text))
+                        .fill(p.raised)
+                        .stroke(Stroke::NONE)
+                        .corner_radius(CornerRadius::same(9))
+                        .min_size(Vec2::new(0.0, 36.0)))
+                    .on_hover_text("Mit diesen Einstellungen später zusammen mit anderen DVDs sichern");
+                if q.clicked() {
+                    enqueue = true;
+                }
                 if soft_button(ui, &p, "Abbrechen").clicked() {
                     close = true;
                 }
@@ -363,6 +378,10 @@ impl App {
         });
         if close {
             self.backup_dlg = None;
+        }
+        if enqueue {
+            self.enqueue_from_dialog();
+            return;
         }
         if start {
             // Vor dem Start nachsehen, ob gleichnamige Dateien schon da sind.
@@ -425,34 +444,7 @@ impl App {
     pub(super) fn start_job(&mut self, ctx: &egui::Context) {
         let Some(dlg) = self.backup_dlg.take() else { return };
         let Some(disc) = self.disc.clone() else { return };
-        // Ziel und Optionen fürs nächste Mal merken
-        self.prefs.backup_kind = dlg.kind;
-        self.prefs.no_split = dlg.no_split;
-        self.prefs.vob_keep_target = dlg.vob_keep_target;
-        self.prefs.remove_puo = self.plan.remove_puo;
-        self.prefs.region_free = self.plan.region_free;
-        let parent_of = |s: &str| PathBuf::from(s).parent().map(|p| p.display().to_string()).unwrap_or_default();
-        match dlg.kind {
-            OutputKind::Folder => self.prefs.folder_dir = parent_of(&dlg.folder),
-            OutputKind::Vob => self.prefs.file_dir = parent_of(&dlg.vob),
-            OutputKind::Mpeg => self.prefs.file_dir = parent_of(&dlg.mpg),
-            _ => self.prefs.file_dir = parent_of(&dlg.iso),
-        }
-        let output = match dlg.kind {
-            OutputKind::Folder => Output::Folder(PathBuf::from(&dlg.folder)),
-            OutputKind::Iso => Output::Iso(with_iso_ext(&dlg.iso)),
-            OutputKind::Burn => Output::Burn(with_iso_ext(&dlg.iso)),
-            OutputKind::Vob => Output::Vob(with_ext(&dlg.vob, "vob")),
-            OutputKind::Mpeg => Output::Mpeg { path: with_ext(&dlg.mpg, "mpg"), audio: dlg.mpeg_audio },
-        };
-        let plan = if matches!(dlg.kind, OutputKind::Vob | OutputKind::Mpeg) {
-            self.plan.for_single_file(&disc, &dlg.vob_sel, dlg.vob_keep_target)
-        } else {
-            let mut plan = self.plan.clone();
-            // Eine gebrannte DVD muss immer die übliche Teilung haben.
-            plan.split_vob = !dlg.no_split || dlg.kind == OutputKind::Burn;
-            plan
-        };
+        let (output, plan) = self.request_from_dialog(&dlg, &disc);
         self.preview.pause();
         let (tx, rx) = channel();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -478,6 +470,56 @@ impl App {
             sectors_out: 0,
             ratio: 1.0,
         });
+    }
+
+    /// Stellt den Backup-Auftrag aus dem Dialog in die Warteschlange.
+    fn enqueue_from_dialog(&mut self) {
+        let Some(dlg) = self.backup_dlg.take() else { return };
+        let Some(disc) = self.disc.clone() else { return };
+        let (output, plan) = self.request_from_dialog(&dlg, &disc);
+        let item = BatchItem::new(
+            disc.source.origin.clone(),
+            disc.source.label.clone(),
+            PlanSource::Fixed { plan: Box::new(plan), fingerprint: Fingerprint::of(&disc) },
+            output,
+            dlg.deep,
+        );
+        self.queue.push(item);
+        let n = self.queue.items().len();
+        self.notice = Some((format!("In die Warteschlange gestellt ({n} Einträge)"), Instant::now()));
+    }
+
+    /// Ziel und Plan zum Backup-Dialog; merkt sich die Optionen fürs nächste Mal.
+    fn request_from_dialog(&mut self, dlg: &BackupDialog, disc: &Disc) -> (Output, Plan) {
+        // Ziel und Optionen fürs nächste Mal merken
+        self.prefs.backup_kind = dlg.kind;
+        self.prefs.no_split = dlg.no_split;
+        self.prefs.vob_keep_target = dlg.vob_keep_target;
+        self.prefs.remove_puo = self.plan.remove_puo;
+        self.prefs.region_free = self.plan.region_free;
+        let parent_of = |s: &str| PathBuf::from(s).parent().map(|p| p.display().to_string()).unwrap_or_default();
+        match dlg.kind {
+            OutputKind::Folder => self.prefs.folder_dir = parent_of(&dlg.folder),
+            OutputKind::Vob => self.prefs.file_dir = parent_of(&dlg.vob),
+            OutputKind::Mpeg => self.prefs.file_dir = parent_of(&dlg.mpg),
+            _ => self.prefs.file_dir = parent_of(&dlg.iso),
+        }
+        let output = match dlg.kind {
+            OutputKind::Folder => Output::Folder(PathBuf::from(&dlg.folder)),
+            OutputKind::Iso => Output::Iso(with_iso_ext(&dlg.iso)),
+            OutputKind::Burn => Output::Burn(with_iso_ext(&dlg.iso)),
+            OutputKind::Vob => Output::Vob(with_ext(&dlg.vob, "vob")),
+            OutputKind::Mpeg => Output::Mpeg { path: with_ext(&dlg.mpg, "mpg"), audio: dlg.mpeg_audio },
+        };
+        let plan = if matches!(dlg.kind, OutputKind::Vob | OutputKind::Mpeg) {
+            self.plan.for_single_file(disc, &dlg.vob_sel, dlg.vob_keep_target)
+        } else {
+            let mut plan = self.plan.clone();
+            // Eine gebrannte DVD muss immer die übliche Teilung haben.
+            plan.split_vob = !dlg.no_split || dlg.kind == OutputKind::Burn;
+            plan
+        };
+        (output, plan)
     }
 
     fn dialog_job(&mut self, ctx: &egui::Context) {
@@ -690,18 +732,25 @@ impl App {
     }
 }
 
-fn dirs_home() -> PathBuf {
+pub(super) fn dirs_home() -> PathBuf {
     std::env::var_os("USERPROFILE").map(PathBuf::from).unwrap_or_else(std::env::temp_dir)
 }
 
-fn sanitize(label: &str) -> String {
+/// Dateiname aus der Bezeichnung einer DVD (ohne Zusatz).
+pub(super) fn file_stem(label: &str) -> String {
     let s: String = label
         .chars()
         .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' { c } else { '_' })
         .collect();
     let s = s.trim().to_string();
-    if s.is_empty() {
-        "DVD".into()
+    if s.is_empty() { "DVD".into() } else { s }
+}
+
+/// Name für das Ergebnis eines Backups.
+pub(super) fn sanitize(label: &str) -> String {
+    let s = file_stem(label);
+    if s == "DVD" && label.trim().is_empty() {
+        s
     } else {
         format!("{s} (klein)")
     }
@@ -760,7 +809,7 @@ fn first_selected_tracks(disc: &Disc, plan: &Plan, sel: &[bool]) -> Vec<(u8, Str
 /// Öffnet den Explorer am Ergebnis: Ordner direkt, Dateien markiert in ihrem Ordner.
 /// Der Pfad muss als `/select,"…"` übergeben werden; normale Argument-Anführungszeichen
 /// versteht der Explorer nicht und öffnet sonst einen falschen Ordner.
-fn show_in_explorer(path: &Path) {
+pub(super) fn show_in_explorer(path: &Path) {
     let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let mut text = path.display().to_string();
     if let Some(rest) = text.strip_prefix(r"\\?\") {
@@ -782,7 +831,7 @@ fn with_iso_ext(s: &str) -> PathBuf {
     with_ext(s, "iso")
 }
 
-fn with_ext(s: &str, ext: &str) -> PathBuf {
+pub(super) fn with_ext(s: &str, ext: &str) -> PathBuf {
     let p = PathBuf::from(s);
     if p.extension().map(|e| e.eq_ignore_ascii_case(ext)).unwrap_or(false) {
         p

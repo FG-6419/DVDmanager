@@ -3,7 +3,9 @@
 pub mod audio;
 pub mod author;
 pub mod backup;
+pub mod batch;
 pub mod cut;
 pub mod plan;
 pub mod preview;
+pub mod project;
 pub mod transcode;

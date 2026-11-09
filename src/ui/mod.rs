@@ -2,6 +2,7 @@
 
 mod dialogs;
 mod preview;
+mod queue;
 mod style;
 mod thumbs;
 mod views;
@@ -17,7 +18,9 @@ use eframe::egui::{self, Color32, Margin};
 use discslim::dvd::model::{Category, Disc};
 use discslim::dvd::source::Source;
 use discslim::engine::backup::{BackupMsg, BackupSummary};
-use discslim::engine::plan::{dvd5_sectors, dvd9_sectors, ItemId, Plan};
+use discslim::engine::batch::Queue;
+use discslim::engine::plan::{dvd5_sectors, dvd9_sectors, ItemId, Mode, Plan, NO_TARGET};
+use discslim::engine::project::{self, Project};
 
 use preview::PreviewState;
 use style::Pal;
@@ -123,6 +126,11 @@ pub struct Prefs {
     pub cut_exact: bool,
     /// Sprungweite der Sekunden-Knöpfe beim Schneiden
     pub jump_secs: u32,
+    /// Abstand für "Kapitel gleichmäßig verteilen" (Minuten)
+    pub chapter_every_min: u32,
+    /// Warteschlange: Ausgabe (ISO oder Ordner) und Zielordner für neu hinzugefügte DVDs
+    pub batch_kind: OutputKind,
+    pub batch_dir: String,
 }
 
 impl Default for Prefs {
@@ -145,6 +153,9 @@ impl Default for Prefs {
             cut_view: false,
             cut_exact: false,
             jump_secs: 10,
+            chapter_every_min: 5,
+            batch_kind: OutputKind::Iso,
+            batch_dir: String::new(),
         }
     }
 }
@@ -177,6 +188,16 @@ pub struct App {
     thumbs: Option<thumbs::Thumbs>,
     hover_loop: Option<thumbs::HoverLoop>,
     target_before_sample: Option<(TargetKind, u32)>,
+
+    /// Projekt, dessen DVD gerade geladen wird; danach gilt sein Plan.
+    pending_project: Option<Project>,
+    /// Datei, in der das aktuelle Projekt zuletzt gespeichert oder aus der es geladen wurde
+    project_path: Option<PathBuf>,
+    /// Kurze Meldung in der Kopfzeile (Text, seit)
+    notice: Option<(String, Instant)>,
+    /// Stapelverarbeitung
+    queue: Queue,
+    queue_open: bool,
     /// Nur im Entwicklungs-Build: springt für Prüfbilder in einen bestimmten Zustand.
     #[cfg(debug_assertions)]
     dev_state: Option<String>,
@@ -222,6 +243,15 @@ impl App {
             }
             if let Some(v) = st.get_string("jump_secs").and_then(|v| v.parse().ok()) {
                 prefs.jump_secs = v;
+            }
+            if let Some(v) = st.get_string("chapter_every_min").and_then(|v| v.parse().ok()) {
+                prefs.chapter_every_min = v;
+            }
+            if let Some(v) = st.get_string("batch_kind") {
+                prefs.batch_kind = if v == "folder" { OutputKind::Folder } else { OutputKind::Iso };
+            }
+            if let Some(v) = st.get_string("batch_dir") {
+                prefs.batch_dir = v;
             }
             if let Some(v) = st.get_string("folder_dir") {
                 prefs.folder_dir = v;
@@ -283,6 +313,11 @@ impl App {
             thumbs: Some(thumbs::Thumbs::new(cc.egui_ctx.clone())),
             hover_loop: None,
             target_before_sample: None,
+            pending_project: None,
+            project_path: None,
+            notice: None,
+            queue: Queue::default(),
+            queue_open: false,
             #[cfg(debug_assertions)]
             dev_state: std::env::var("DISCSLIM_DEV_STATE").ok(),
         };
@@ -302,15 +337,118 @@ impl App {
     }
 
     /// Öffnet Ordner, Laufwerk oder ISO im Hintergrund und analysiert den Inhalt.
+    /// Eine Projektdatei öffnet ihre DVD und stellt danach alles wieder her.
     fn open_path(&mut self, ctx: &egui::Context, path: PathBuf) {
+        if Project::is_project_path(&path) {
+            self.open_project(ctx, &path);
+            return;
+        }
+        self.pending_project = None;
+        self.project_path = None;
         self.start_loader(ctx, false, move |tx, cancel| {
             let source = Source::open(&path)?;
             load_and_analyse(source, tx, cancel)
         });
     }
 
+    /// Lädt eine Projektdatei und liest die zugehörige DVD neu ein.
+    fn open_project(&mut self, ctx: &egui::Context, path: &Path) {
+        let proj = match Project::load(path) {
+            Ok(p) => p,
+            Err(e) => {
+                self.error = Some(e);
+                return;
+            }
+        };
+        let source = proj.source.clone();
+        if !source.exists() {
+            self.error = Some(format!(
+                "Die DVD zum Projekt „{}“ ist nicht mehr da:\n{}\n\nLege die DVD ein oder stelle den Ordner bzw. die ISO-Datei wieder an diesen Ort.",
+                proj.label,
+                source.display()
+            ));
+            return;
+        }
+        self.start_loader(ctx, false, move |tx, cancel| {
+            let source = Source::open(&source)?;
+            load_and_analyse(source, tx, cancel)
+        });
+        self.pending_project = Some(proj);
+        self.project_path = Some(path.to_path_buf());
+    }
+
+    pub(super) fn pick_project(&mut self, ctx: &egui::Context) {
+        let mut d = rfd::FileDialog::new()
+            .set_title("Projekt öffnen")
+            .add_filter("DVDmanager-Projekt", &[project::EXTENSION]);
+        if let Some(dir) = Some(&self.prefs.file_dir).filter(|s| !s.is_empty() && Path::new(s).exists()) {
+            d = d.set_directory(dir);
+        }
+        if let Some(p) = d.pick_file() {
+            self.open_project(ctx, &p);
+        }
+    }
+
+    /// Speichert die Einstellungen als Projektdatei. Ohne bekannten Ort oder mit
+    /// `ask` wird nach dem Ort gefragt.
+    pub(super) fn save_project(&mut self, ask: bool) {
+        let Some(disc) = self.disc.clone() else { return };
+        let path = match (&self.project_path, ask) {
+            (Some(p), false) => p.clone(),
+            _ => {
+                let name = self
+                    .project_path
+                    .as_ref()
+                    .and_then(|p| p.file_name())
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| format!("{}.{}", dialogs::file_stem(&disc.source.label), project::EXTENSION));
+                let mut d = rfd::FileDialog::new()
+                    .set_title("Projekt speichern")
+                    .add_filter("DVDmanager-Projekt", &[project::EXTENSION])
+                    .set_file_name(name);
+                let dir = self
+                    .project_path
+                    .as_ref()
+                    .and_then(|p| p.parent().map(Path::to_path_buf))
+                    .or_else(|| Some(PathBuf::from(&self.prefs.file_dir)).filter(|p| p.exists()));
+                if let Some(dir) = dir {
+                    d = d.set_directory(dir);
+                }
+                let Some(mut p) = d.save_file() else { return };
+                if !Project::is_project_path(&p) {
+                    p.set_extension(project::EXTENSION);
+                }
+                p
+            }
+        };
+        match Project::new(&disc, &self.plan).save(&path) {
+            Ok(()) => {
+                self.notice = Some((format!("Projekt gespeichert: {}", path.file_name().unwrap_or_default().to_string_lossy()), Instant::now()));
+                self.project_path = Some(path);
+            }
+            Err(e) => self.error = Some(format!("Das Projekt konnte nicht gespeichert werden.\n{e}")),
+        }
+    }
+
+    /// Stellt die Zielgröße in der Oberfläche passend zum Plan ein.
+    fn sync_target_kind(&mut self) {
+        let s = self.plan.target_sectors;
+        self.prefs.target_kind = if s == dvd5_sectors() {
+            TargetKind::Dvd5
+        } else if s == dvd9_sectors() {
+            TargetKind::Dvd9
+        } else if s >= NO_TARGET {
+            TargetKind::Unlimited
+        } else {
+            self.prefs.custom_mb = ((s * 2048) / (1024 * 1024)).max(1) as u32;
+            TargetKind::Custom
+        };
+    }
+
     /// Erzeugt die Beispiel-DVD und öffnet sie.
     fn open_sample(&mut self, ctx: &egui::Context) {
+        self.pending_project = None;
+        self.project_path = None;
         self.start_loader(ctx, true, move |tx, cancel| {
             let _ = tx.send(LoadMsg::Progress(0.0, "Beispiel-DVD wird erzeugt …".into()));
             let tx2 = tx.clone();
@@ -370,6 +508,9 @@ impl App {
             Some(Err(e)) => {
                 self.loader = None;
                 self.keep_plan_on_load = false;
+                if self.pending_project.take().is_some() {
+                    self.project_path = None;
+                }
                 self.preview.dirty = true;
                 if e != "Abgebrochen" {
                     self.error = Some(e);
@@ -403,7 +544,7 @@ impl App {
         plan.remove_puo = self.prefs.remove_puo;
         plan.region_free = self.prefs.region_free;
         if self.prefs.only_lang {
-            apply_language(&disc, &mut plan, &self.prefs.lang);
+            plan.keep_only_language(&disc, &self.prefs.lang);
         }
         self.plan = plan;
         self.sel = disc
@@ -412,6 +553,23 @@ impl App {
             .position(|t| t.category == Category::MainMovie)
             .map(|i| Selection::Item(ItemId::Title(i)))
             .unwrap_or(Selection::None);
+        // Geladenes Projekt: seine Einstellungen ersetzen die Vorgaben.
+        if let Some(proj) = self.pending_project.take() {
+            match proj.plan_for(&disc) {
+                Ok(plan) => {
+                    self.plan = plan;
+                    self.sync_target_kind();
+                    if self.plan.mode == Mode::Reauthor {
+                        self.sel = if self.plan.reauthor.is_empty() { Selection::None } else { Selection::Entry(0) };
+                    }
+                    self.notice = Some((format!("Projekt „{}“ geladen", proj.label), Instant::now()));
+                }
+                Err(e) => {
+                    self.project_path = None;
+                    self.error = Some(format!("{e}\n\nDie DVD wurde mit den Standard-Einstellungen geöffnet."));
+                }
+            }
+        }
         self.disc = Some(Arc::new(disc));
         self.preview.dirty = true;
     }
@@ -483,11 +641,32 @@ impl App {
     }
 
     fn handle_dropped(&mut self, ctx: &egui::Context) {
-        let dropped = ctx.input(|i| i.raw.dropped_files.first().map(|f| f.path().to_path_buf()));
-        if let Some(p) = dropped {
-            if self.job.is_none() && self.loader.is_none() {
-                self.open_path(ctx, p);
-            }
+        let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| !p.as_os_str().is_empty()).collect());
+        if dropped.is_empty() {
+            return;
+        }
+        // Bei offener Warteschlange landen alle gezogenen DVDs und Projekte dort.
+        if self.queue_open {
+            self.queue_add_paths(&dropped);
+            return;
+        }
+        if self.job.is_none() && self.loader.is_none() {
+            self.open_path(ctx, dropped[0].clone());
+        }
+    }
+
+    /// Tastenkürzel: Strg+S speichert das Projekt, Strg+Umschalt+S fragt nach dem Ort.
+    fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+        if self.disc.is_none() || self.loader.is_some() || self.job.is_some() {
+            return;
+        }
+        let (save, save_as) = ctx.input_mut(|i| {
+            let as_ = i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::S);
+            let plain = i.consume_key(egui::Modifiers::COMMAND, egui::Key::S);
+            (plain, as_)
+        });
+        if save || save_as {
+            self.save_project(save_as);
         }
     }
 
@@ -649,6 +828,38 @@ impl App {
                     d.no_split = true;
                 }
             }
+            ("chapters", 5) => {
+                // Eintrag mit eigenen Kapitelmarken, eine davon außerhalb des Schnitts
+                self.plan.mode = Mode::Reauthor;
+                if let Some(d) = self.disc.clone() {
+                    let t = &d.titles[0];
+                    let mut e = discslim::engine::plan::ReauthorEntry::new(0, 0, t.chapters.len().saturating_sub(1), Default::default());
+                    let total = discslim::engine::plan::entry_duration_ms(&d, &e);
+                    e.cut.end_ms = Some(total * 7 / 8);
+                    e.chapter_marks = Some(vec![total / 5, total * 2 / 5, total * 3 / 5, total * 9 / 10]);
+                    self.plan.reauthor.push(e);
+                }
+                self.sel = Selection::Entry(0);
+                self.preview.dirty = true;
+            }
+            ("queue", 5) => {
+                use discslim::engine::batch::{AutoSettings, BatchItem, PlanSource, Status};
+                let auto = AutoSettings { target_sectors: dvd5_sectors(), only_lang: None, remove_puo: false, region_free: false, split_vob: true };
+                let src = self.disc.as_ref().map(|d| d.source.origin.clone()).unwrap_or_default();
+                for (label, status, f) in [
+                    ("URLAUB_2019", Status::Failed("Diese DVD ist kopiergeschützt (CSS) und wird nicht verarbeitet.".into()), 0.0),
+                    ("HOCHZEIT", Status::Running, 0.42),
+                    ("KINDERGEBURTSTAG", Status::Waiting, 0.0),
+                    ("WEIHNACHTEN", Status::Waiting, 0.0),
+                ] {
+                    let mut it = BatchItem::new(src.clone(), label.into(), PlanSource::Auto(auto.clone()), discslim::engine::backup::Output::Iso(PathBuf::from(format!("C:\\Videos\\{label} (klein).iso"))), false);
+                    it.status = status;
+                    it.fraction = f;
+                    it.stage = "Titelset 1".into();
+                    self.queue.push(it);
+                }
+                self.queue_open = true;
+            }
             ("settings", 5) => self.settings_open = true,
             ("light", 5) => self.set_dark(ctx, false),
             ("play", 5) => self.preview.play(),
@@ -722,32 +933,20 @@ fn load_and_analyse(
 
 const COPY_PROTECTED: &str = "Diese DVD ist kopiergeschützt (CSS). Das Programm verarbeitet bewusst nur ungeschützte Inhalte, etwa selbst erstellte DVDs oder eigene VIDEO_TS-Ordner.";
 
-/// Wählt beim Öffnen nur die bevorzugte Sprache, sofern es sie gibt.
-fn apply_language(disc: &Disc, plan: &mut Plan, lang: &str) {
-    for (i, t) in disc.titles.iter().enumerate() {
-        let id = ItemId::Title(i);
-        let mut s = plan.settings(id);
-        if t.audio.iter().any(|a| a.attr.lang == lang) {
-            for a in &t.audio {
-                s.audio[a.phys as usize] = a.attr.lang == lang;
-            }
-        }
-        if t.subs.iter().any(|a| a.attr.lang == lang) {
-            for a in &t.subs {
-                for p in &a.phys {
-                    s.subs[*p as usize] = a.attr.lang == lang;
-                }
-            }
-        }
-        plan.items.insert(id, s);
-    }
-}
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.pump_loader(ctx);
         self.pump_job(ctx);
         self.handle_dropped(ctx);
+        self.handle_shortcuts(ctx);
+        if self.queue.is_running() {
+            // Fortschritt der Warteschlange sichtbar halten
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        }
+        if self.notice.as_ref().is_some_and(|n| n.1.elapsed().as_secs() >= 4) {
+            self.notice = None;
+        }
         self.logic_screenshot(ctx);
     }
 
@@ -805,6 +1004,9 @@ impl eframe::App for App {
         );
         storage.set_string("folder_dir", self.prefs.folder_dir.clone());
         storage.set_string("jump_secs", self.prefs.jump_secs.to_string());
+        storage.set_string("chapter_every_min", self.prefs.chapter_every_min.to_string());
+        storage.set_string("batch_kind", if self.prefs.batch_kind == OutputKind::Folder { "folder" } else { "iso" }.into());
+        storage.set_string("batch_dir", self.prefs.batch_dir.clone());
         storage.set_string("file_dir", self.prefs.file_dir.clone());
         let p = &self.prefs;
         for (key, v) in [

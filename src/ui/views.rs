@@ -11,7 +11,7 @@ use discslim::dvd::model::{fmt_time, Category, CellStats, Disc};
 use discslim::engine::plan::{
     entry_duration_ms, entry_kept_fraction, Cut,
     dvd5_sectors, dvd9_sectors, fmt_size, reauthor_cells, Estimate, ItemId, Mode, ReauthorEntry,
-    Smoothing, VideoMode,
+    Smoothing, VideoMode, MIN_CHAPTER_GAP_MS,
 };
 
 use super::style::{self, card, item_row, legend, primary_button, section, segmented, semibold, soft_button};
@@ -84,6 +84,7 @@ impl App {
                         self.disc = None;
                         self.preview.stop();
                         self.sel = Selection::None;
+                        self.project_path = None;
                     }
 
                     let has_disc = self.disc.is_some();
@@ -116,6 +117,7 @@ impl App {
                                 self.open_backup_dialog();
                             }
                         }
+                        self.queue_badge(ui);
                         let theme_icon = if p.dark { ic::SUN } else { ic::MOON };
                         if style::icon_button(ui, &p, theme_icon, "Design wechseln").clicked() {
                             let d = !p.dark;
@@ -137,11 +139,29 @@ impl App {
                             if style::icon_button(ui, &p, ic::MAGNIFYING_GLASS, tip).clicked() && !full {
                                 self.deep_analyse(ctx);
                             }
+                            let save_tip = match &self.project_path {
+                                Some(p) => format!("Projekt speichern (Strg+S)\n{}\nRechtsklick: Speichern unter …", p.display()),
+                                None => "Projekt speichern: Auswahl, Schnitte, Kapitel und Kompression (Strg+S)".to_string(),
+                            };
+                            let r = style::icon_button(ui, &p, ic::FLOPPY_DISK, &save_tip);
+                            if r.clicked() {
+                                self.save_project(false);
+                            }
+                            r.context_menu(|ui| {
+                                if ui.button(format!("{}  Speichern unter …", ic::FLOPPY_DISK)).clicked() {
+                                    self.save_project(true);
+                                    ui.close();
+                                }
+                            });
                             if style::icon_button(ui, &p, ic::FOLDER_OPEN, "Andere DVD öffnen").clicked() {
                                 self.disc = None;
                                 self.preview.stop();
                                 self.sel = Selection::None;
+                                self.project_path = None;
                             }
+                        }
+                        if let Some((text, _)) = &self.notice {
+                            ui.label(RichText::new(format!("{}  {text}", ic::CHECK_CIRCLE)).size(13.0).color(p.good));
                         }
                     });
                 });
@@ -213,11 +233,33 @@ impl App {
 
                 ui.add_space(18.0);
                 ui.vertical_centered(|ui| {
-                    ui.label(RichText::new("Oder ziehe einen Ordner oder eine ISO-Datei einfach hierher.").color(p.muted));
+                    ui.label(RichText::new("Oder ziehe einen Ordner, eine ISO-Datei oder ein Projekt einfach hierher.").color(p.muted));
                     ui.add_space(10.0);
-                    if soft_button(ui, &p, &format!("{}  Mit einer Beispiel-DVD ausprobieren", ic::SPARKLE)).clicked() {
-                        self.open_sample(ctx);
-                    }
+                    // Drei Knöpfe nebeneinander, mittig
+                    let labels = [
+                        format!("{}  Projekt öffnen", ic::FLOPPY_DISK),
+                        format!("{}  Mehrere DVDs nacheinander", ic::QUEUE),
+                        format!("{}  Beispiel-DVD ausprobieren", ic::SPARKLE),
+                    ];
+                    let font = egui::FontId::proportional(14.0);
+                    let widths: f32 = labels
+                        .iter()
+                        .map(|l| ui.painter().layout_no_wrap(l.clone(), font.clone(), p.text).size().x + 2.0 * ui.spacing().button_padding.x)
+                        .sum();
+                    let row_w = widths + 2.0 * 8.0;
+                    ui.horizontal(|ui| {
+                        ui.add_space(((ui.available_width() - row_w) / 2.0).max(0.0));
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        if soft_button(ui, &p, &labels[0]).on_hover_text("Eine gespeicherte Projektdatei (.dvdproj) laden").clicked() {
+                            self.pick_project(ctx);
+                        }
+                        if soft_button(ui, &p, &labels[1]).on_hover_text("Warteschlange: mehrere DVDs, ISO-Dateien oder Projekte nacheinander sichern").clicked() {
+                            self.queue_open = true;
+                        }
+                        if soft_button(ui, &p, &labels[2]).clicked() {
+                            self.open_sample(ctx);
+                        }
+                    });
                     ui.add_space(14.0);
                     ui.label(
                         RichText::new(format!(
@@ -425,6 +467,12 @@ impl App {
                     let total = total_ms;
                     let len = e.cut.end().min(total).saturating_sub(e.cut.start());
                     format!("{} {} geschnitten", fmt_time(len), ic::SCISSORS)
+                } else {
+                    chapters
+                };
+                // Eigene Kapitelmarken: Anzahl der neuen Kapitel anhängen
+                let chapters = if e.chapter_marks.is_some() {
+                    format!("{chapters} · {} {} Kap.", ic::BOOKMARK_SIMPLE, e.chapter_count(disc))
                 } else {
                     chapters
                 };
@@ -797,10 +845,13 @@ impl App {
                     let total = entry_duration_ms(disc, e);
                     let exact = e.cut.exact;
                     self.plan.reauthor[i].cut = Cut::whole(total, exact);
+                    // Eigene Kapitelmarken gehören ebenfalls zum alten Bereich.
+                    self.plan.reauthor[i].chapter_marks = None;
                     self.preview.dirty = true;
                 }
                 ui.add_space(4.0);
                 self.view_cut(ui, disc, i);
+                self.view_chapter_marks(ui, disc, i);
                 // 1:1: Bild unverändert übernehmen, nur an bildgenauen Schnittstellen wird neu kodiert
                 let mut one_to_one = matches!(settings.video, VideoMode::Keep);
                 if style::check(ui, &p, &mut one_to_one, "1:1 übernehmen (Bild nicht verkleinern)") {
@@ -976,6 +1027,165 @@ impl App {
             ui.label(RichText::new(format!("Länge nach dem Schnitt: {}", fmt_time(len))).size(13.0));
         }
         let _ = changed;
+        ui.add_space(4.0);
+    }
+
+    /// Kapitel-Editor: eigene Kapitelmarken setzen, verschieben, verteilen oder entfernen.
+    fn view_chapter_marks(&mut self, ui: &mut Ui, disc: &Disc, i: usize) {
+        let p = self.pal;
+        let now = self.preview.current_ms();
+        let Some(e) = self.plan.reauthor.get(i) else { return };
+        let total = entry_duration_ms(disc, e);
+        let (cut_a, cut_b) = e.cut.effective(total);
+        let cut_b = cut_b.min(total);
+        section(ui, &p, ic::BOOKMARK_SIMPLE, "KAPITELMARKEN");
+
+        let Some(marks) = e.chapter_marks.clone() else {
+            let n = e.last_chapter + 1 - e.first_chapter.min(e.last_chapter);
+            let text = if n == 1 { "Die DVD hat hier 1 Kapitel.".to_string() } else { format!("Die {n} Kapitel der DVD werden übernommen.") };
+            ui.label(RichText::new(text).size(13.0).color(p.muted));
+            ui.horizontal(|ui| {
+                if ui
+                    .button(RichText::new(format!("{}  Kapitel bearbeiten", ic::PENCIL_SIMPLE)).size(13.0))
+                    .on_hover_text("Übernimmt die Kapitel der DVD als Marken, die du dann ändern kannst")
+                    .clicked()
+                {
+                    let m = self.plan.reauthor[i].original_marks(disc);
+                    self.plan.reauthor[i].chapter_marks = Some(m);
+                }
+                if ui
+                    .add_enabled(now.is_some(), egui::Button::new(RichText::new(format!("{}  Neu: Marke hier", ic::MAP_PIN)).size(13.0)))
+                    .on_hover_text("Verwirft die Kapitel der DVD und beginnt mit einer Marke an der Stelle der Vorschau")
+                    .clicked()
+                {
+                    let mut m: Vec<u64> = now.into_iter().collect();
+                    ReauthorEntry::normalize_marks(&mut m);
+                    self.plan.reauthor[i].chapter_marks = Some(m);
+                }
+            });
+            ui.add_space(4.0);
+            return;
+        };
+
+        let mut marks = marks;
+        let mut changed = false;
+        let mut seek = None;
+        let row = |ui: &mut Ui, n: usize, at: u64, outside: bool| {
+            let color = if outside { p.faint } else { p.text };
+            ui.add_sized([22.0, 22.0], egui::Label::new(RichText::new(format!("{n}.")).color(p.muted)));
+            let r = ui.add_sized([82.0, 22.0], egui::Label::new(RichText::new(fmt_time_precise(at)).family(semibold()).color(color)));
+            if outside {
+                r.on_hover_text("Liegt nicht im geschnittenen Bereich und entfällt in der neuen DVD");
+            }
+        };
+        // Kleine Symbolknöpfe, damit eine Zeile in die schmale Spalte passt
+        let mini = |ui: &mut Ui, icon: &str, tip: &str| {
+            let b = egui::Button::new(RichText::new(icon).size(14.0).color(p.text))
+                .fill(Color32::TRANSPARENT)
+                .stroke(Stroke::NONE)
+                .corner_radius(CornerRadius::same(6))
+                .min_size(Vec2::new(24.0, 24.0));
+            ui.add(b).on_hover_text(tip).clicked()
+        };
+        egui::Frame::new().fill(p.raised).corner_radius(CornerRadius::same(8)).inner_margin(Margin::symmetric(8, 4)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 0.0;
+            ui.horizontal(|ui| {
+                row(ui, 1, cut_a, false);
+                ui.label(RichText::new("Anfang").size(12.5).color(p.muted));
+            });
+            let mut remove = None;
+            let mut nudge: Option<(usize, i64)> = None;
+            for (k, m) in marks.iter().enumerate() {
+                let outside = *m <= cut_a || *m >= cut_b;
+                ui.horizontal(|ui| {
+                    row(ui, k + 2, *m, outside);
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    if mini(ui, ic::PLAY, "In der Vorschau zu dieser Marke springen") {
+                        seek = Some(*m);
+                    }
+                    if mini(ui, ic::CARET_LEFT, "Eine Sekunde früher") {
+                        nudge = Some((k, -1000));
+                    }
+                    if mini(ui, ic::CARET_RIGHT, "Eine Sekunde später") {
+                        nudge = Some((k, 1000));
+                    }
+                    if let Some(t) = now {
+                        if mini(ui, ic::MAP_PIN, "Auf die Stelle der Vorschau setzen") {
+                            nudge = Some((k, t as i64 - *m as i64));
+                        }
+                    }
+                    if mini(ui, ic::X, "Marke entfernen") {
+                        remove = Some(k);
+                    }
+                });
+            }
+            if let Some(k) = remove {
+                marks.remove(k);
+                changed = true;
+            }
+            if let Some((k, d)) = nudge {
+                let v = (marks[k] as i64 + d).clamp(0, total as i64) as u64;
+                marks[k] = v;
+                changed = true;
+            }
+        });
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            let b = ui
+                .add_enabled(now.is_some(), egui::Button::new(RichText::new(format!("{}  Marke hier", ic::PLUS)).size(13.0)))
+                .on_hover_text("Setzt eine Kapitelmarke an das Bild, das die Vorschau gerade zeigt");
+            if b.clicked() {
+                if let Some(t) = now {
+                    marks.push(t);
+                    changed = true;
+                }
+            }
+            if ui
+                .button(RichText::new(format!("{}  Original", ic::ARROW_COUNTER_CLOCKWISE)).size(13.0))
+                .on_hover_text("Wieder die Kapitel der DVD verwenden")
+                .clicked()
+            {
+                self.plan.reauthor[i].chapter_marks = None;
+            }
+        });
+        if self.plan.reauthor[i].chapter_marks.is_none() {
+            return;
+        }
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Alle").color(p.muted));
+            ui.add(egui::DragValue::new(&mut self.prefs.chapter_every_min).range(1..=60).suffix(" Min."));
+            if ui
+                .button(RichText::new(format!("{}  verteilen", ic::LIST_NUMBERS)).size(13.0))
+                .on_hover_text("Ersetzt alle Marken durch gleichmäßige Abstände im geschnittenen Bereich")
+                .clicked()
+            {
+                let step = u64::from(self.prefs.chapter_every_min.max(1)) * 60_000;
+                marks = (1..).map(|k| cut_a + k * step).take_while(|m| *m + MIN_CHAPTER_GAP_MS < cut_b).take(98).collect();
+                changed = true;
+            }
+            if !marks.is_empty() && ui.button(RichText::new(format!("{}  Alle weg", ic::TRASH)).size(13.0)).clicked() {
+                marks.clear();
+                changed = true;
+            }
+        });
+        if changed {
+            ReauthorEntry::normalize_marks(&mut marks);
+            marks.truncate(98);
+            self.plan.reauthor[i].chapter_marks = Some(marks);
+        }
+        let count = self.plan.reauthor[i].chapter_count(disc);
+        ui.label(
+            RichText::new(format!(
+                "Die neue DVD hat hier {count} Kapitel. Sie beginnen am nächsten Schlüsselbild, also auf etwa eine halbe Sekunde genau."
+            ))
+            .size(12.5)
+            .color(p.muted),
+        );
+        if let Some(t) = seek {
+            self.preview.pause();
+            self.preview.seek_time(t as f64, true);
+        }
         ui.add_space(4.0);
     }
 

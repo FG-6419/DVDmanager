@@ -467,10 +467,32 @@ impl App {
     }
 
     /// Lädt die Vorschau neu, wenn sich die Auswahl geändert hat.
+    /// Eigene Kapitelmarken eines Eintrags für die Zeitleiste.
+    fn custom_chapters(&self, sel: Selection) -> Option<Vec<(u64, String)>> {
+        let Selection::Entry(i) = sel else { return None };
+        let marks = self.plan.reauthor.get(i)?.chapter_marks.as_ref()?;
+        let mut out = vec![(0, "Kapitel 1".to_string())];
+        out.extend(marks.iter().enumerate().map(|(k, m)| (*m, format!("Kapitel {}", k + 2))));
+        Some(out)
+    }
+
     pub(super) fn sync_preview(&mut self) {
         self.update_program();
         let want = self.preview_sel();
         if !self.preview.dirty && self.preview.loaded == Some(want) {
+            // Kapitelmarken können sich ändern, ohne dass die Vorschau neu lädt.
+            if let Selection::Entry(i) = want {
+                let chapters = match self.custom_chapters(want) {
+                    Some(c) => c,
+                    None => match (self.disc.as_ref(), self.plan.reauthor.get(i)) {
+                        (Some(d), Some(e)) => chapter_list(d, e.title, e.first_chapter, e.last_chapter),
+                        _ => return,
+                    },
+                };
+                if chapters != self.preview.chapters {
+                    self.preview.chapters = chapters;
+                }
+            }
             return;
         }
         self.preview.dirty = false;
@@ -492,7 +514,10 @@ impl App {
                 let Some(e) = self.plan.reauthor.get(i) else { return };
                 let seg = title_segments(&disc, e.title, e.first_chapter, e.last_chapter);
                 let ms = seg.iter().map(|s| s.ms).sum();
-                (seg, ms, chapter_list(&disc, e.title, e.first_chapter, e.last_chapter))
+                let chapters = self
+                    .custom_chapters(want)
+                    .unwrap_or_else(|| chapter_list(&disc, e.title, e.first_chapter, e.last_chapter));
+                (seg, ms, chapters)
             }
             _ => (Vec::new(), 0, Vec::new()),
         };
