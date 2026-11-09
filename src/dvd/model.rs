@@ -153,7 +153,7 @@ impl Disc {
             vts.insert(n, v);
         }
         if vts.is_empty() {
-            return Err("Die DVD enthält keine lesbaren Titelsets.".into());
+            return Err(tr!("Die DVD enthält keine lesbaren Titelsets.", "The DVD contains no readable title sets.").into());
         }
         let mut titles = Vec::new();
         for (i, tt) in vmg.titles.iter().enumerate() {
@@ -334,8 +334,8 @@ impl Disc {
                 if seen % 16 == 0 {
                     let frac = seen as f32 / budget as f32;
                     let done_frac = if full { frac } else { frac.min(1.0).sqrt() };
-                    if !progress(done_frac.min(0.99), "Analysiere die DVD …") {
-                        return Err("Abgebrochen".into());
+                    if !progress(done_frac.min(0.99), tr!("Analysiere die DVD …", "Analysing the DVD …")) {
+                        return Err(tr!("Abgebrochen", "Cancelled").into());
                     }
                 }
             }

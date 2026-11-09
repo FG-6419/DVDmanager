@@ -299,9 +299,18 @@ impl App {
                 };
             }
         }
-        // Für die Prüfbilder immer das Standard-Design
+        // Sprache der Oberfläche: gespeichert, sonst wie Windows
+        let ui_lang = cc
+            .storage
+            .and_then(|st| st.get_string("ui_lang"))
+            .and_then(|v| discslim::i18n::Lang::from_code(&v))
+            .unwrap_or_else(discslim::i18n::system_lang);
+        discslim::i18n::set_lang(ui_lang);
+        // Für die Prüfbilder immer das Standard-Design, Sprache nach DISCSLIM_LANG (sonst Deutsch)
         if screenshot.is_some() {
             prefs = Prefs::default();
+            let lang = std::env::var("DISCSLIM_LANG").ok().and_then(|v| discslim::i18n::Lang::from_code(&v));
+            discslim::i18n::set_lang(lang.unwrap_or(discslim::i18n::Lang::De));
         }
         style::install_fonts(&cc.egui_ctx);
         let pal = if prefs.dark { style::DARK } else { style::LIGHT };
@@ -382,8 +391,8 @@ impl App {
         };
         let source = proj.source.clone();
         if !source.exists() {
-            self.error = Some(format!(
-                "Die DVD zum Projekt „{}“ ist nicht mehr da:\n{}\n\nLege die DVD ein oder stelle den Ordner bzw. die ISO-Datei wieder an diesen Ort.",
+            self.error = Some(trf!(
+                "Die DVD zum Projekt „{}“ ist nicht mehr da:\n{}\n\nLege die DVD ein oder stelle den Ordner bzw. die ISO-Datei wieder an diesen Ort.", "The DVD for project \"{}\" is no longer available:\n{}\n\nInsert the DVD or put the folder or ISO file back in this location.",
                 proj.label,
                 source.display()
             ));
@@ -452,7 +461,7 @@ impl App {
     }
 
     pub(super) fn pick_project(&mut self, ctx: &egui::Context) {
-        let d = self.load_dialog("Projekt öffnen").add_filter("DVDmanager-Projekt", &[project::EXTENSION]);
+        let d = self.load_dialog(tr!("Projekt öffnen", "Open project")).add_filter(tr!("DVDmanager-Projekt", "DVDmanager project"), &[project::EXTENSION]);
         if let Some(p) = d.pick_file() {
             self.note_load(&p);
             self.open_project(ctx, &p);
@@ -473,8 +482,8 @@ impl App {
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| format!("{}.{}", dialogs::file_stem(&disc.source.label), project::EXTENSION));
                 let mut d = self
-                    .save_dialog("Projekt speichern")
-                    .add_filter("DVDmanager-Projekt", &[project::EXTENSION])
+                    .save_dialog(tr!("Projekt speichern", "Save project"))
+                    .add_filter(tr!("DVDmanager-Projekt", "DVDmanager project"), &[project::EXTENSION])
                     .set_file_name(name);
                 // Ein schon gespeichertes Projekt bleibt in seinem Ordner.
                 if let Some(dir) = self.project_path.as_ref().and_then(|p| p.parent()).filter(|d| d.is_dir()) {
@@ -492,10 +501,10 @@ impl App {
         };
         match Project::new(&disc, &self.plan).save(&path) {
             Ok(()) => {
-                self.notice = Some((format!("Projekt gespeichert: {}", path.file_name().unwrap_or_default().to_string_lossy()), Instant::now()));
+                self.notice = Some((trf!("Projekt gespeichert: {}", "Project saved: {}", path.file_name().unwrap_or_default().to_string_lossy()), Instant::now()));
                 self.project_path = Some(path);
             }
-            Err(e) => self.error = Some(format!("Das Projekt konnte nicht gespeichert werden.\n{e}")),
+            Err(e) => self.error = Some(trf!("Das Projekt konnte nicht gespeichert werden.\n{e}", "The project could not be saved.\n{e}")),
         }
     }
 
@@ -519,10 +528,10 @@ impl App {
         self.pending_project = None;
         self.project_path = None;
         self.start_loader(ctx, true, move |tx, cancel| {
-            let _ = tx.send(LoadMsg::Progress(0.0, "Beispiel-DVD wird erzeugt …".into()));
+            let _ = tx.send(LoadMsg::Progress(0.0, tr!("Beispiel-DVD wird erzeugt …", "Creating sample DVD …").into()));
             let tx2 = tx.clone();
             let dir = discslim::demo::build_sample(&discslim::demo::sample_dir(), |f| {
-                let _ = tx2.send(LoadMsg::Progress(f * 0.8, "Beispiel-DVD wird erzeugt …".into()));
+                let _ = tx2.send(LoadMsg::Progress(f * 0.8, tr!("Beispiel-DVD wird erzeugt …", "Creating sample DVD …").into()));
             })?;
             let source = Source::open(&dir)?;
             load_and_analyse(source, tx, cancel)
@@ -545,7 +554,7 @@ impl App {
             let msg = match res {
                 Ok(Ok(d)) => LoadMsg::Done(Box::new(d)),
                 Ok(Err(e)) => LoadMsg::Failed(e),
-                Err(_) => LoadMsg::Failed("Die DVD konnte nicht gelesen werden (interner Fehler).".into()),
+                Err(_) => LoadMsg::Failed(tr!("Die DVD konnte nicht gelesen werden (interner Fehler).", "The DVD could not be read (internal error).").into()),
             };
             let _ = tx.send(msg);
             ctx2.request_repaint();
@@ -553,7 +562,7 @@ impl App {
         self.loader = Some(Loader {
             rx,
             progress: 0.0,
-            text: "DVD wird geöffnet …".into(),
+            text: tr!("DVD wird geöffnet …", "Opening DVD …").into(),
             cancel,
             is_sample,
             thumbs: Vec::new(),
@@ -592,7 +601,7 @@ impl App {
                     self.project_path = None;
                 }
                 self.preview.dirty = true;
-                if e != "Abgebrochen" {
+                if e != tr!("Abgebrochen", "Cancelled") {
                     self.error = Some(e);
                 }
             }
@@ -642,11 +651,11 @@ impl App {
                     if self.plan.mode == Mode::Reauthor {
                         self.sel = if self.plan.reauthor.is_empty() { Selection::None } else { Selection::Entry(0) };
                     }
-                    self.notice = Some((format!("Projekt „{}“ geladen", proj.label), Instant::now()));
+                    self.notice = Some((trf!("Projekt „{}“ geladen", "Project \"{}\" loaded", proj.label), Instant::now()));
                 }
                 Err(e) => {
                     self.project_path = None;
-                    self.error = Some(format!("{e}\n\nDie DVD wurde mit den Standard-Einstellungen geöffnet."));
+                    self.error = Some(trf!("{e}\n\nDie DVD wurde mit den Standard-Einstellungen geöffnet.", "{e}\n\nThe DVD was opened with the default settings."));
                 }
             }
         }
@@ -704,7 +713,7 @@ impl App {
     }
 
     fn pick_folder(&mut self, ctx: &egui::Context) {
-        if let Some(p) = self.load_dialog("DVD-Ordner wählen (VIDEO_TS)").pick_folder() {
+        if let Some(p) = self.load_dialog(tr!("DVD-Ordner wählen (VIDEO_TS)", "Choose DVD folder (VIDEO_TS)")).pick_folder() {
             self.note_load(&p);
             self.open_path(ctx, p);
         }
@@ -712,9 +721,9 @@ impl App {
 
     fn pick_iso(&mut self, ctx: &egui::Context) {
         if let Some(p) = self
-            .load_dialog("ISO-Abbild wählen")
-            .add_filter("DVD-Abbild", &["iso", "img"])
-            .add_filter("Alle Dateien", &["*"])
+            .load_dialog(tr!("ISO-Abbild wählen", "Choose ISO image"))
+            .add_filter(tr!("DVD-Abbild", "DVD image"), &["iso", "img"])
+            .add_filter(tr!("Alle Dateien", "All files"), &["*"])
             .pick_file()
         {
             self.note_load(&p);
@@ -921,7 +930,7 @@ impl App {
                     let origin = d.source.origin.clone();
                     self.start_loader(ctx, false, move |tx, _cancel| {
                         let disc = Disc::open(Source::open(&origin)?)?;
-                        let _ = tx.send(LoadMsg::Progress(0.86, "DVD wird analysiert …".into()));
+                        let _ = tx.send(LoadMsg::Progress(0.86, tr!("DVD wird analysiert …", "Analysing DVD …").into()));
                         spawn_load_thumbs(&disc, tx.clone());
                         std::thread::sleep(std::time::Duration::from_secs(30));
                         Ok(disc)
@@ -1015,9 +1024,9 @@ fn load_and_analyse(
     cancel: &AtomicBool,
 ) -> Result<Disc, String> {
     let mut disc = Disc::open(source)?;
-    let _ = tx.send(LoadMsg::Progress(0.8, "DVD wird analysiert …".into()));
+    let _ = tx.send(LoadMsg::Progress(0.8, tr!("DVD wird analysiert …", "Analysing DVD …").into()));
     if disc.check_scrambled() {
-        return Err(COPY_PROTECTED.into());
+        return Err(copy_protected().into());
     }
     spawn_load_thumbs(&disc, tx.clone());
     let tx2 = tx.clone();
@@ -1027,7 +1036,7 @@ fn load_and_analyse(
     };
     let scrambled = disc.analyse(false, &mut cb)?;
     if scrambled {
-        return Err(COPY_PROTECTED.into());
+        return Err(copy_protected().into());
     }
     Ok(disc)
 }
@@ -1062,7 +1071,9 @@ fn spawn_load_thumbs(disc: &Disc, tx: std::sync::mpsc::Sender<LoadMsg>) {
     });
 }
 
-const COPY_PROTECTED: &str = "Diese DVD ist kopiergeschützt (CSS). Das Programm verarbeitet bewusst nur ungeschützte Inhalte, etwa selbst erstellte DVDs oder eigene VIDEO_TS-Ordner.";
+fn copy_protected() -> &'static str {
+    tr!("Diese DVD ist kopiergeschützt (CSS). Das Programm verarbeitet bewusst nur ungeschützte Inhalte, etwa selbst erstellte DVDs oder eigene VIDEO_TS-Ordner.", "This DVD is copy-protected (CSS). The program deliberately processes only unprotected content, such as self-made DVDs or your own VIDEO_TS folders.")
+}
 
 
 impl eframe::App for App {
@@ -1137,6 +1148,7 @@ impl eframe::App for App {
         storage.set_string("jump_secs", self.prefs.jump_secs.to_string());
         storage.set_string("chapter_every_min", self.prefs.chapter_every_min.to_string());
         storage.set_string("batch_kind", if self.prefs.batch_kind == OutputKind::Folder { "folder" } else { "iso" }.into());
+        storage.set_string("ui_lang", discslim::i18n::lang().code().into());
         storage.set_string("load_dir", self.prefs.load_dir.clone());
         storage.set_string("save_dir", self.prefs.save_dir.clone());
         storage.set_string("file_dir", self.prefs.file_dir.clone());

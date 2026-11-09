@@ -234,9 +234,9 @@ fn run_full_disc(disc: &Disc, plan: &Plan, dir: &Path, ctx: &mut Ctx, files: &mu
     let mut written_total = 0u64;
 
     // Erst das Hauptmenü, damit seine Größe für die Lage der Titelsets feststeht.
-    let _ = ctx.tx.send(BackupMsg::Stage("Hauptmenü".into()));
+    let _ = ctx.tx.send(BackupMsg::Stage(tr!("Hauptmenü", "Main menu").into()));
     let mut w = SpaceWriter::new(dir, "VIDEO_TS.VOB", true, false);
-    let vmg_menu = process_space(disc, plan, Space::menu(0), &mut w, &mut budget, ctx, "Hauptmenü")?;
+    let vmg_menu = process_space(disc, plan, Space::menu(0), &mut w, &mut budget, ctx, tr!("Hauptmenü", "Main menu"))?;
     let vmg_vob_paths = w.paths().to_vec();
     written_total += u64::from(vmg_menu.new_total);
 
@@ -247,7 +247,7 @@ fn run_full_disc(disc: &Disc, plan: &Plan, dir: &Path, ctx: &mut Ctx, files: &mu
 
     for (n, v) in &disc.vts {
         ctx.check()?;
-        let label = format!("Titelset {n}");
+        let label = trf!("Titelset {n}", "Title set {n}");
         let _ = ctx.tx.send(BackupMsg::Stage(label.clone()));
 
         let mut wm = SpaceWriter::new(dir, &format!("VTS_{n:02}_0.VOB"), true, false);
@@ -305,10 +305,10 @@ fn run_full_disc(disc: &Disc, plan: &Plan, dir: &Path, ctx: &mut Ctx, files: &mu
 
 fn run_reauthor(disc: &Disc, plan: &Plan, dir: &Path, ctx: &mut Ctx, files: &mut Vec<PathBuf>) -> Res<u64> {
     if plan.reauthor.is_empty() {
-        return Err("Es wurde noch kein Titel für die neue DVD ausgewählt.".into());
+        return Err(tr!("Es wurde noch kein Titel für die neue DVD ausgewählt.", "No title has been chosen for the new DVD yet.").into());
     }
     if plan.reauthor.len() > 99 {
-        return Err("Eine DVD kann höchstens 99 Titel enthalten.".into());
+        return Err(tr!("Eine DVD kann höchstens 99 Titel enthalten.", "A DVD can contain at most 99 titles.").into());
     }
     let est = plan.estimate(disc);
     let mut budget = Budget::new(plan, &est, 50.0);
@@ -322,7 +322,7 @@ fn run_reauthor(disc: &Disc, plan: &Plan, dir: &Path, ctx: &mut Ctx, files: &mut
     for (i, entry) in plan.reauthor.iter().enumerate() {
         ctx.check()?;
         let title_no = i + 1;
-        let label = format!("Titel {title_no} von {count}");
+        let label = trf!("Titel {title_no} von {count}", "Title {title_no} of {count}");
         let _ = ctx.tx.send(BackupMsg::Stage(label.clone()));
         let (avts, paths, entry_titles) = author_entry(disc, plan, entry, title_no, count, dir, &mut budget, ctx, &label)?;
         let ifo_bytes = author::build_vts(&avts);
@@ -371,8 +371,8 @@ fn author_entry(
     ctx: &mut Ctx,
     label: &str,
 ) -> Res<(AVts, Vec<PathBuf>, TitleEntry)> {
-    let t = disc.titles.get(entry.title).ok_or("Titel nicht gefunden")?;
-    let v = disc.vts.get(&t.vts).ok_or("Titelset nicht gefunden")?;
+    let t = disc.titles.get(entry.title).ok_or(tr!("Titel nicht gefunden", "Title not found"))?;
+    let v = disc.vts.get(&t.vts).ok_or(tr!("Titelset nicht gefunden", "Title set not found"))?;
     let decision = CellDecision::from_settings(&entry.settings);
     let mut writer = SpaceWriter::new(dir, &format!("VTS_{title_no:02}_"), false, plan.split_vob);
     let mut rq = Requant::new();
@@ -473,7 +473,7 @@ fn author_entry(
         if item.cell_start || mark_hit {
             close(&mut open, &mut cells_out, &mut cell_addrs, &mut elapsed_base, new_pos, vob_new, cell_new);
             if cells_out.len() >= 255 {
-                return Err("Der Titel hat zu viele Zellen für eine einzelne Programmkette.".into());
+                return Err(tr!("Der Titel hat zu viele Zellen für eine einzelne Programmkette.", "The title has too many cells for a single program chain.").into());
             }
             if last_src_vob != Some(item.pc.vob_id) || cell_new == 255 {
                 vob_new += 1;
@@ -487,7 +487,7 @@ fn author_entry(
             };
             if new_program || pgc.programs.is_empty() {
                 if pgc.programs.len() >= 99 {
-                    return Err("Ein Titel kann höchstens 99 Kapitel haben.".into());
+                    return Err(tr!("Ein Titel kann höchstens 99 Kapitel haben.", "A title can have at most 99 chapters.").into());
                 }
                 pgc.programs.push((cells_out.len() + 1) as u8);
             }
@@ -524,7 +524,7 @@ fn author_entry(
     })?;
     close(&mut open, &mut cells_out, &mut cell_addrs, &mut elapsed_base, new_pos, vob_new, cell_new);    writer.finish()?;
     if new_pos == 0 {
-        return Err(format!("Titel {} enthält keine lesbaren Videodaten.", t.number));
+        return Err(trf!("Titel {} enthält keine lesbaren Videodaten.", "Title {} contains no readable video data.", t.number));
     }
     map.new_total = new_pos;
 
@@ -591,11 +591,11 @@ fn cell_flags(raw: &[u8], pgc_off: usize, cell_idx: usize) -> [u8; 4] {
 /// mpeg: Some(gewünschte Tonspur) für die Ausgabe als schlichter MPEG-2-Strom.
 fn run_vob(disc: &Disc, plan: &Plan, path: &Path, ctx: &mut Ctx, mpeg: Option<Option<u8>>) -> Res<u64> {
     if plan.reauthor.is_empty() {
-        return Err("Es wurde kein Titel für die Datei ausgewählt.".into());
+        return Err(tr!("Es wurde kein Titel für die Datei ausgewählt.", "No title has been chosen for the file.").into());
     }
     let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let name = path.file_name().ok_or("Der Dateiname fehlt.")?.to_string_lossy().to_string();
+    let name = path.file_name().ok_or(tr!("Der Dateiname fehlt.", "The file name is missing."))?.to_string_lossy().to_string();
 
     let est = plan.estimate(disc);
     let mut budget = Budget::new(plan, &est, 50.0);
@@ -610,9 +610,9 @@ fn run_vob(disc: &Disc, plan: &Plan, path: &Path, ctx: &mut Ctx, mpeg: Option<Op
 
     for (i, entry) in plan.reauthor.iter().enumerate() {
         ctx.check()?;
-        let t = disc.titles.get(entry.title).ok_or("Titel nicht gefunden")?;
-        let v = disc.vts.get(&t.vts).ok_or("Titelset nicht gefunden")?;
-        let label = format!("Titel {} von {count}", i + 1);
+        let t = disc.titles.get(entry.title).ok_or(tr!("Titel nicht gefunden", "Title not found"))?;
+        let v = disc.vts.get(&t.vts).ok_or(tr!("Titelset nicht gefunden", "Title set not found"))?;
+        let label = trf!("Titel {} von {count}", "Title {} of {count}", i + 1);
         let _ = ctx.tx.send(BackupMsg::Stage(label.clone()));
         let mut decision = CellDecision::from_settings(&entry.settings);
         if let Some(want) = mpeg {
@@ -695,11 +695,11 @@ fn run_vob(disc: &Disc, plan: &Plan, path: &Path, ctx: &mut Ctx, mpeg: Option<Op
     }
     writer.finish()?;
     if new_pos == 0 {
-        return Err("Die gewählten Titel enthalten keine lesbaren Videodaten.".into());
+        return Err(tr!("Die gewählten Titel enthalten keine lesbaren Videodaten.", "The chosen titles contain no readable video data.").into());
     }
 
     // Verweise gelten je Titel; die alten Sektornummern sind nur dort eindeutig.
-    let _ = ctx.tx.send(BackupMsg::Stage("Datei abschließen".into()));
+    let _ = ctx.tx.send(BackupMsg::Stage(tr!("Datei abschließen", "Finishing file").into()));
     for map in maps.iter().filter(|_| mpeg.is_none()) {
         let mut lookup = map.clone();
         lookup.vobus.sort_by_key(|v| v.0);
@@ -751,7 +751,7 @@ fn guard_source(disc: &Disc, output: &Output, video_dir: &Path) -> Res<()> {
         Output::Folder(_) => {
             if let Some(FileRef::Disk(ifo)) = disc.source.files.get("VIDEO_TS.IFO") {
                 if ifo.parent().is_some_and(|src| same(src, video_dir)) {
-                    return Err("Das Ziel ist derselbe Ordner wie die Quelle. Bitte wähle einen anderen Zielordner.".into());
+                    return Err(tr!("Das Ziel ist derselbe Ordner wie die Quelle. Bitte wähle einen anderen Zielordner.", "The target is the same folder as the source. Please choose a different target folder.").into());
                 }
             }
         }
@@ -762,7 +762,7 @@ fn guard_source(disc: &Disc, output: &Output, video_dir: &Path) -> Res<()> {
                 .values()
                 .any(|r| matches!(r, FileRef::Disk(d) if same(p, d)));
             if is_source_file || same(p, &disc.source.origin) {
-                return Err("Das Ziel ist dieselbe Datei wie die Quelle. Bitte wähle einen anderen Namen.".into());
+                return Err(tr!("Das Ziel ist dieselbe Datei wie die Quelle. Bitte wähle einen anderen Namen.", "The target is the same file as the source. Please choose a different name.").into());
             }
         }
     }
@@ -779,18 +779,18 @@ fn run_inner(req: &BackupRequest, tx: &Sender<BackupMsg>, cancel: &AtomicBool) -
 
     let analysed;
     let disc: &Disc = if req.deep_analysis && !req.disc.analysed_full {
-        let _ = tx.send(BackupMsg::Stage("Tiefenanalyse".into()));
+        let _ = tx.send(BackupMsg::Stage(tr!("Tiefenanalyse", "Deep analysis").into()));
         let mut d = (*req.disc).clone();
         let mut cb = |f: f32, _t: &str| -> bool {
             let _ = tx.send(BackupMsg::Progress {
                 fraction: f * 0.1,
                 sectors_out: 0,
                 ratio_in: 1.0,
-                current: "Tiefenanalyse".into(),
+                current: tr!("Tiefenanalyse", "Deep analysis").into(),
             });
             !cancel.load(Ordering::Relaxed)
         };
-        d.analyse(true, &mut cb).map_err(|e| if e == "Abgebrochen" { CANCELLED.to_string() } else { e })?;
+        d.analyse(true, &mut cb).map_err(|e| if e == tr!("Abgebrochen", "Cancelled") { CANCELLED.to_string() } else { e })?;
         analysed = d;
         &analysed
     } else {
@@ -799,7 +799,7 @@ fn run_inner(req: &BackupRequest, tx: &Sender<BackupMsg>, cancel: &AtomicBool) -
 
     if disc.scrambled || req.disc.check_scrambled() {
         return Err(
-            "Diese DVD ist kopiergeschützt (CSS). Das Programm verarbeitet nur ungeschützte Inhalte.".to_string(),
+            tr!("Diese DVD ist kopiergeschützt (CSS). Das Programm verarbeitet nur ungeschützte Inhalte.", "This DVD is copy-protected (CSS). The program only processes unprotected content.").to_string(),
         );
     }
 
@@ -853,7 +853,7 @@ fn run_inner(req: &BackupRequest, tx: &Sender<BackupMsg>, cancel: &AtomicBool) -
             let vd = p.join("VIDEO_TS");
             (p.clone(), vd, None)
         }
-        Output::Vob(_) | Output::Mpeg { .. } => return Err("Interner Fehler bei der Datei-Ausgabe".into()),
+        Output::Vob(_) | Output::Mpeg { .. } => return Err(tr!("Interner Fehler bei der Datei-Ausgabe", "Internal error in file output").into()),
         Output::Iso(p) | Output::Burn(p) => {
             let temp = PathBuf::from(format!("{}.arbeitsordner", p.display()));
             (p.clone(), temp.join("VIDEO_TS"), Some(temp))
@@ -908,16 +908,16 @@ fn run_inner(req: &BackupRequest, tx: &Sender<BackupMsg>, cancel: &AtomicBool) -
     };
 
     // Sicherheitsprüfung: Das Ergebnis muss sich wieder als DVD öffnen lassen.
-    let _ = tx.send(BackupMsg::Stage("Ergebnis prüfen".into()));
+    let _ = tx.send(BackupMsg::Stage(tr!("Ergebnis prüfen", "Checking result").into()));
     let check = Source::open(&video_dir).and_then(Disc::open);
     if let Err(e) = check {
         finish(&temp_dir);
-        return Err(format!("Das Ergebnis lässt sich nicht lesen: {e}"));
+        return Err(trf!("Das Ergebnis lässt sich nicht lesen: {e}", "The result cannot be read: {e}"));
     }
 
     let mut burn_started = false;
     if is_iso {
-        let _ = tx.send(BackupMsg::Stage("ISO-Abbild schreiben".into()));
+        let _ = tx.send(BackupMsg::Stage(tr!("ISO-Abbild schreiben", "Writing ISO image").into()));
         let tx2 = tx.clone();
         let res = iso::write_iso(&out_path, &disc.source.label, &files, |done, total| {
             if cancel.load(Ordering::Relaxed) {
@@ -927,14 +927,14 @@ fn run_inner(req: &BackupRequest, tx: &Sender<BackupMsg>, cancel: &AtomicBool) -
                 fraction: 0.85 + 0.14 * (done as f32 / total.max(1) as f32),
                 sectors_out: done / SECTOR as u64,
                 ratio_in: 1.0,
-                current: "ISO-Abbild".into(),
+                current: tr!("ISO-Abbild", "ISO image").into(),
             });
             true
         });
         finish(&temp_dir);
         if let Err(e) = res {
             let _ = std::fs::remove_file(&out_path);
-            return Err(if e == "Abgebrochen" { CANCELLED.into() } else { e });
+            return Err(if e == tr!("Abgebrochen", "Cancelled") { CANCELLED.into() } else { e });
         }
         if matches!(req.output, Output::Burn(_)) {
             burn_started = start_windows_burner(&out_path);
@@ -959,7 +959,7 @@ pub fn run(req: BackupRequest, tx: Sender<BackupMsg>, cancel: Arc<AtomicBool>) {
         Ok(Ok(s)) => BackupMsg::Done(s),
         Ok(Err(e)) if e == CANCELLED => BackupMsg::Cancelled,
         Ok(Err(e)) => BackupMsg::Failed(e),
-        Err(_) => BackupMsg::Failed("Beim Umwandeln ist ein interner Fehler aufgetreten.".into()),
+        Err(_) => BackupMsg::Failed(tr!("Beim Umwandeln ist ein interner Fehler aufgetreten.", "An internal error occurred during conversion.").into()),
     };
     let _ = tx.send(msg);
 }

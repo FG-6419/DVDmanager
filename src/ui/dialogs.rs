@@ -10,6 +10,7 @@ use eframe::egui::{self, Align, Area, Color32, CornerRadius, Id, Layout, Margin,
 use egui_phosphor::regular as ic;
 
 use discslim::dvd::ifo::lang_name;
+use discslim::i18n::Lang;
 use discslim::dvd::model::{fmt_time, Category, Disc};
 use discslim::engine::backup::{self, BackupRequest, Output};
 use discslim::engine::batch::{BatchItem, PlanSource};
@@ -72,11 +73,11 @@ fn free_space(path: &Path) -> Option<u64> {
 fn fmt_duration(secs: f64) -> String {
     let s = secs.max(0.0) as u64;
     if s >= 3600 {
-        format!("{} Std. {} Min.", s / 3600, (s / 60) % 60)
+        trf!("{} Std. {} Min.", "{} h {} min", s / 3600, (s / 60) % 60)
     } else if s >= 60 {
-        format!("{} Min. {} Sek.", s / 60, s % 60)
+        trf!("{} Min. {} Sek.", "{} min {} s", s / 60, s % 60)
     } else {
-        format!("{s} Sek.")
+        trf!("{s} Sek.", "{s} s")
     }
 }
 
@@ -148,7 +149,7 @@ impl App {
                                     let scale = (tile.width() / size.x.max(1.0)).min(tile.height() / size.y.max(1.0));
                                     let r = egui::Rect::from_center_size(tile.center(), *size * scale);
                                     ui.painter().image(*id, r, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
-                                    ui.label(RichText::new(format!("Titel {n} · {}", fmt_time(*ms))).size(12.0).color(p.muted));
+                                    ui.label(RichText::new(trf!("Titel {n} · {}", "Title {n} · {}", fmt_time(*ms))).size(12.0).color(p.muted));
                                 });
                             }
                         });
@@ -157,7 +158,7 @@ impl App {
                 }
                 ui.add_space(12.0);
                 ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-                    if soft_button(ui, &p, "Abbrechen").clicked() {
+                    if soft_button(ui, &p, tr!("Abbrechen", "Cancel")).clicked() {
                         cancel = true;
                     }
                 });
@@ -175,7 +176,7 @@ impl App {
             modal(ctx, &p, "fehler", 480.0, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(ic::WARNING_CIRCLE).size(26.0).color(p.warn));
-                    ui.label(RichText::new("Das hat nicht geklappt").family(semibold()).size(17.0));
+                    ui.label(RichText::new(tr!("Das hat nicht geklappt", "That didn't work")).family(semibold()).size(17.0));
                 });
                 ui.add_space(6.0);
                 ui.label(RichText::new(msg).size(14.0).color(p.muted));
@@ -211,24 +212,24 @@ impl App {
         let start_dir = self.save_start_dir();
         let dlg = self.backup_dlg.as_mut().unwrap();
         modal(ctx, &p, "backup", 560.0, |ui| {
-            ui.label(RichText::new("Backup erstellen").family(semibold()).size(20.0));
+            ui.label(RichText::new(tr!("Backup erstellen", "Create backup")).family(semibold()).size(20.0));
             ui.add_space(4.0);
             let width = ui.available_width();
             let opts = [
-                (OutputKind::Iso, "ISO-Abbild"),
-                (OutputKind::Folder, "Ordner"),
-                (OutputKind::Vob, "VOB-Datei"),
+                (OutputKind::Iso, tr!("ISO-Abbild", "ISO image")),
+                (OutputKind::Folder, tr!("Ordner", "Folder")),
+                (OutputKind::Vob, tr!("VOB-Datei", "VOB file")),
                 (OutputKind::Mpeg, "MPEG-2"),
-                (OutputKind::Burn, "Brennen"),
+                (OutputKind::Burn, tr!("Brennen", "Burn")),
             ];
             segmented(ui, &p, &mut dlg.kind, &opts, width);
             ui.add_space(6.0);
             let hint = match dlg.kind {
-                OutputKind::Iso => "Eine einzige Datei, die du später brennen oder einbinden kannst.",
-                OutputKind::Folder => "Legt die Ordner VIDEO_TS und AUDIO_TS an.",
-                OutputKind::Burn => "Legt ein ISO-Abbild an und öffnet danach den Windows-Brenner.",
-                OutputKind::Vob => "Schreibt die gewählten Titel nacheinander in eine einzige VOB-Datei, ohne DVD-Struktur und Menüs.",
-                OutputKind::Mpeg => "Schreibt die gewählten Titel als schlichte MPEG-2-Datei: nur Bild und eine Tonspur, ohne DVD-Navigation und Untertitel.",
+                OutputKind::Iso => tr!("Eine einzige Datei, die du später brennen oder einbinden kannst.", "A single file you can burn or mount later."),
+                OutputKind::Folder => tr!("Legt die Ordner VIDEO_TS und AUDIO_TS an.", "Creates the VIDEO_TS and AUDIO_TS folders."),
+                OutputKind::Burn => tr!("Legt ein ISO-Abbild an und öffnet danach den Windows-Brenner.", "Creates an ISO image and then opens the Windows disc burner."),
+                OutputKind::Vob => tr!("Schreibt die gewählten Titel nacheinander in eine einzige VOB-Datei, ohne DVD-Struktur und Menüs.", "Writes the chosen titles one after another into a single VOB file, without DVD structure and menus."),
+                OutputKind::Mpeg => tr!("Schreibt die gewählten Titel als schlichte MPEG-2-Datei: nur Bild und eine Tonspur, ohne DVD-Navigation und Untertitel.", "Writes the chosen titles as a plain MPEG-2 file: video and one audio track only, without DVD navigation and subtitles."),
             };
             ui.label(RichText::new(hint).size(13.0).color(p.muted));
             ui.add_space(4.0);
@@ -247,21 +248,21 @@ impl App {
                     .desired_width(ui.available_width() - 120.0)
                     .margin(Margin::symmetric(10, 8));
                 ui.add(edit);
-                if soft_button(ui, &p, &format!("{}  Wählen", ic::FOLDER_OPEN)).clicked() {
+                if soft_button(ui, &p, &trf!("{}  Wählen", "{}  Choose", ic::FOLDER_OPEN)).clicked() {
                     if is_folder {
                         // Im Ordner über dem bisherigen Ziel beginnen
                         let cur = PathBuf::from(value.as_str());
                         let dir = cur.parent().filter(|x| x.is_dir()).map(Path::to_path_buf).unwrap_or_else(|| start_dir.clone());
-                        if let Some(f) = rfd::FileDialog::new().set_title("Zielordner wählen").set_directory(dir).pick_folder() {
+                        if let Some(f) = rfd::FileDialog::new().set_title(tr!("Zielordner wählen", "Choose target folder")).set_directory(dir).pick_folder() {
                             *value = f.display().to_string();
                         }
                     } else {
                         let mut d = if is_mpeg {
-                            rfd::FileDialog::new().set_title("MPEG-2-Datei speichern").add_filter("MPEG-2", &["mpg", "mpeg"])
+                            rfd::FileDialog::new().set_title(tr!("MPEG-2-Datei speichern", "Save MPEG-2 file")).add_filter("MPEG-2", &["mpg", "mpeg"])
                         } else if is_vob {
-                            rfd::FileDialog::new().set_title("VOB-Datei speichern").add_filter("VOB-Datei", &["vob"])
+                            rfd::FileDialog::new().set_title(tr!("VOB-Datei speichern", "Save VOB file")).add_filter(tr!("VOB-Datei", "VOB file"), &["vob"])
                         } else {
-                            rfd::FileDialog::new().set_title("ISO-Abbild speichern").add_filter("DVD-Abbild", &["iso"])
+                            rfd::FileDialog::new().set_title(tr!("ISO-Abbild speichern", "Save ISO image")).add_filter(tr!("DVD-Abbild", "DVD image"), &["iso"])
                         };
                         let cur = PathBuf::from(value.as_str());
                         if let Some(n) = cur.file_name() {
@@ -277,7 +278,7 @@ impl App {
 
             if matches!(dlg.kind, OutputKind::Vob | OutputKind::Mpeg) {
                 ui.add_space(8.0);
-                ui.label(RichText::new("Titel für die Datei").family(semibold()).size(13.0).color(p.muted));
+                ui.label(RichText::new(tr!("Titel für die Datei", "Titles for the file")).family(semibold()).size(13.0).color(p.muted));
                 egui::ScrollArea::vertical().id_salt("vob-titel").max_height(132.0).show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
                     let rows = vob_rows(&disc, &self.plan);
@@ -286,17 +287,17 @@ impl App {
                         style::check(ui, &p, on, text);
                     }
                     if rows.is_empty() {
-                        ui.label(RichText::new("Die Liste „Neue DVD“ ist noch leer.").size(13.0).color(p.muted));
+                        ui.label(RichText::new(tr!("Die Liste „Neue DVD“ ist noch leer.", "The \"New DVD\" list is still empty.")).size(13.0).color(p.muted));
                     }
                 });
             }
 
             ui.add_space(8.0);
-            ui.label(RichText::new("Optionen").family(semibold()).size(13.0).color(p.muted));
+            ui.label(RichText::new(tr!("Optionen", "Options")).family(semibold()).size(13.0).color(p.muted));
             let full_done = disc.analysed_full;
             let mut deep = dlg.deep || full_done;
             ui.add_enabled_ui(!full_done, |ui| {
-                style::check(ui, &p, &mut deep, "Vorher Tiefenanalyse ausführen (genauer, dauert länger)");
+                style::check(ui, &p, &mut deep, tr!("Vorher Tiefenanalyse ausführen (genauer, dauert länger)", "Run deep analysis first (more accurate, takes longer)"));
             });
             if !full_done {
                 dlg.deep = deep;
@@ -308,8 +309,8 @@ impl App {
                     dlg.mpeg_audio = tracks.first().map(|t| t.0);
                 }
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Tonspur").color(p.muted));
-                    let current = tracks.iter().find(|t| Some(t.0) == dlg.mpeg_audio).map(|t| t.1.clone()).unwrap_or_else(|| "keine".into());
+                    ui.label(RichText::new(tr!("Tonspur", "Audio track")).color(p.muted));
+                    let current = tracks.iter().find(|t| Some(t.0) == dlg.mpeg_audio).map(|t| t.1.clone()).unwrap_or_else(|| tr!("keine", "none").into());
                     egui::ComboBox::from_id_salt("mpeg-ton").width(260.0).selected_text(current).show_ui(ui, |ui| {
                         for (ph, name) in &tracks {
                             ui.selectable_value(&mut dlg.mpeg_audio, Some(*ph), name);
@@ -319,21 +320,21 @@ impl App {
             }
             match dlg.kind {
                 OutputKind::Vob | OutputKind::Mpeg => {
-                    style::check(ui, &p, &mut dlg.vob_keep_target, "Automatik hält auch hier die Zielgröße ein");
+                    style::check(ui, &p, &mut dlg.vob_keep_target, tr!("Automatik hält auch hier die Zielgröße ein", "Automatic mode keeps the target size here too"));
                 }
                 _ => {
-                    style::check(ui, &p, &mut self.plan.remove_puo, "Sperren für Vorspulen und Menütasten aufheben");
+                    style::check(ui, &p, &mut self.plan.remove_puo, tr!("Sperren für Vorspulen und Menütasten aufheben", "Remove fast-forward and menu button locks"));
                     if self.plan.mode == Mode::FullDisc {
-                        style::check(ui, &p, &mut self.plan.region_free, "Ländercode der DVD entfernen");
+                        style::check(ui, &p, &mut self.plan.region_free, tr!("Ländercode der DVD entfernen", "Remove the DVD's region code"));
                     }
                 }
             }
             if matches!(dlg.kind, OutputKind::Iso | OutputKind::Folder) {
-                style::check(ui, &p, &mut dlg.no_split, "VOB-Dateien in voller Länge, nicht in 1-GB-Teile zerlegen");
+                style::check(ui, &p, &mut dlg.no_split, tr!("VOB-Dateien in voller Länge, nicht in 1-GB-Teile zerlegen", "Keep VOB files in full length, do not split into 1 GB parts"));
                 if dlg.no_split {
                     ui.label(
-                        RichText::new(format!(
-                            "{}  Gut zum Weiterverarbeiten. DVD-Player und Brennprogramme erwarten aber die geteilten Dateien.",
+                        RichText::new(trf!(
+                            "{}  Gut zum Weiterverarbeiten. DVD-Player und Brennprogramme erwarten aber die geteilten Dateien.", "{}  Good for further processing. DVD players and burning software expect the split files, though.",
                             ic::INFO
                         ))
                         .size(12.5)
@@ -350,7 +351,7 @@ impl App {
             };
             let needed = (est.total * 2048.0) as u64;
             let need_txt = fmt_size(est.total);
-            ui.label(RichText::new(format!("Voraussichtliche Größe: {need_txt}")).size(14.0));
+            ui.label(RichText::new(trf!("Voraussichtliche Größe: {need_txt}", "Estimated size: {need_txt}")).size(14.0));
             let target_path = PathBuf::from(match dlg.kind {
                 OutputKind::Folder => &dlg.folder,
                 OutputKind::Vob => &dlg.vob,
@@ -365,8 +366,8 @@ impl App {
                 if free < required {
                     blocked = true;
                     ui.label(
-                        RichText::new(format!(
-                            "{}  Auf dem Ziel sind nur {} frei, nötig sind etwa {}.",
+                        RichText::new(trf!(
+                            "{}  Auf dem Ziel sind nur {} frei, nötig sind etwa {}.", "{}  Only {} free on the target, about {} needed.",
                             ic::WARNING,
                             fmt_size(free as f64 / 2048.0),
                             fmt_size(required as f64 / 2048.0)
@@ -376,7 +377,7 @@ impl App {
                 }
             }
             if !est.fits {
-                ui.label(RichText::new(format!("{}  Das Ergebnis wird größer als das Ziel.", ic::WARNING)).color(p.warn));
+                ui.label(RichText::new(trf!("{}  Das Ergebnis wird größer als das Ziel.", "{}  The result will be larger than the target.", ic::WARNING)).color(p.warn));
             }
             let _ = is_file;
             let path_ok = !target_path.as_os_str().is_empty()
@@ -385,21 +386,21 @@ impl App {
             ui.add_space(10.0);
             ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
                 let ok = path_ok && !blocked;
-                if primary_button(ui, &p, &format!("{}  Backup starten", ic::PLAY), ok).clicked() {
+                if primary_button(ui, &p, &trf!("{}  Backup starten", "{}  Start backup", ic::PLAY), ok).clicked() {
                     start = true;
                 }
                 // Die Warteschlange prüft den Platz erst, wenn sie den Eintrag abarbeitet.
                 let q = ui
-                    .add_enabled(path_ok, egui::Button::new(RichText::new(format!("{}  Zur Warteschlange", ic::QUEUE)).size(14.0).color(p.text))
+                    .add_enabled(path_ok, egui::Button::new(RichText::new(trf!("{}  Zur Warteschlange", "{}  Add to queue", ic::QUEUE)).size(14.0).color(p.text))
                         .fill(p.raised)
                         .stroke(Stroke::NONE)
                         .corner_radius(CornerRadius::same(9))
                         .min_size(Vec2::new(0.0, 36.0)))
-                    .on_hover_text("Mit diesen Einstellungen später zusammen mit anderen DVDs sichern");
+                    .on_hover_text(tr!("Mit diesen Einstellungen später zusammen mit anderen DVDs sichern", "Back up later with these settings, together with other DVDs"));
                 if q.clicked() {
                     enqueue = true;
                 }
-                if soft_button(ui, &p, "Abbrechen").clicked() {
+                if soft_button(ui, &p, tr!("Abbrechen", "Cancel")).clicked() {
                     close = true;
                 }
             });
@@ -431,13 +432,13 @@ impl App {
         modal(ctx, &p, "ueberschreiben", 480.0, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(ic::WARNING).size(26.0).color(p.warn));
-                ui.label(RichText::new("Dateien überschreiben?").family(semibold()).size(18.0));
+                ui.label(RichText::new(tr!("Dateien überschreiben?", "Overwrite files?")).family(semibold()).size(18.0));
             });
             ui.add_space(4.0);
             let text = if found.len() == 1 {
-                "Diese Datei gibt es am Ziel schon:".to_string()
+                tr!("Diese Datei gibt es am Ziel schon:", "This file already exists at the target:").to_string()
             } else {
-                format!("Diese {} Dateien gibt es am Ziel schon:", found.len())
+                trf!("Diese {} Dateien gibt es am Ziel schon:", "These {} files already exist at the target:", found.len())
             };
             ui.label(RichText::new(text).color(p.muted));
             egui::ScrollArea::vertical().id_salt("vorhanden").max_height(150.0).show(ui, |ui| {
@@ -445,17 +446,17 @@ impl App {
                     ui.label(RichText::new(name).size(13.0));
                 }
                 if found.len() > 60 {
-                    ui.label(RichText::new(format!("… und {} weitere", found.len() - 60)).size(13.0).color(p.muted));
+                    ui.label(RichText::new(trf!("… und {} weitere", "… and {} more", found.len() - 60)).size(13.0).color(p.muted));
                 }
             });
             ui.add_space(6.0);
-            ui.label(RichText::new("Beim Überschreiben gehen sie verloren.").size(13.0).color(p.muted));
+            ui.label(RichText::new(tr!("Beim Überschreiben gehen sie verloren.", "They will be lost when overwritten.")).size(13.0).color(p.muted));
             ui.add_space(10.0);
             ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-                if primary_button(ui, &p, "Überschreiben", true).clicked() {
+                if primary_button(ui, &p, tr!("Überschreiben", "Overwrite"), true).clicked() {
                     yes = true;
                 }
-                if soft_button(ui, &p, "Abbrechen").clicked() {
+                if soft_button(ui, &p, tr!("Abbrechen", "Cancel")).clicked() {
                     no = true;
                 }
             });
@@ -492,7 +493,7 @@ impl App {
             rx,
             cancel,
             started: Instant::now(),
-            stage: "Vorbereiten".into(),
+            stage: tr!("Vorbereiten", "Preparing").into(),
             current: String::new(),
             fraction: 0.0,
             sectors_out: 0,
@@ -514,7 +515,7 @@ impl App {
         );
         self.queue.push(item);
         let n = self.queue.items().len();
-        self.notice = Some((format!("In die Warteschlange gestellt ({n} Einträge)"), Instant::now()));
+        self.notice = Some((trf!("In die Warteschlange gestellt ({})", "Added to the queue ({})", discslim::i18n::count(n, "Eintrag", "Einträge", "entry", "entries")), Instant::now()));
     }
 
     /// Ziel und Plan zum Backup-Dialog; merkt sich die Optionen fürs nächste Mal.
@@ -570,7 +571,7 @@ impl App {
         let (fraction, stage, sectors, ratio, elapsed) =
             (j.fraction, j.stage.clone(), j.sectors_out, j.ratio, j.started.elapsed().as_secs_f64());
         modal(ctx, &p, "job", 500.0, |ui| {
-            ui.label(RichText::new("Backup läuft").family(semibold()).size(20.0));
+            ui.label(RichText::new(tr!("Backup läuft", "Backup running")).family(semibold()).size(20.0));
             ui.add_space(2.0);
             ui.label(RichText::new(stage).size(14.0).color(p.muted));
             ui.add_space(8.0);
@@ -581,14 +582,14 @@ impl App {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if fraction > 0.02 {
                         let remaining = elapsed * f64::from(1.0 - fraction) / f64::from(fraction);
-                        ui.label(RichText::new(format!("noch etwa {}", fmt_duration(remaining))).color(p.muted));
+                        ui.label(RichText::new(trf!("noch etwa {}", "about {} left", fmt_duration(remaining))).color(p.muted));
                     }
                 });
             });
             ui.add_space(4.0);
             ui.label(
-                RichText::new(format!(
-                    "Bisher geschrieben: {}  ·  Bild behält {:.0} %  ·  Vergangen: {}",
+                RichText::new(trf!(
+                    "Bisher geschrieben: {}  ·  Bild behält {:.0} %  ·  Vergangen: {}", "Written so far: {}  ·  Video keeps {:.0} %  ·  Elapsed: {}",
                     fmt_size(sectors as f64),
                     ratio * 100.0,
                     fmt_duration(elapsed)
@@ -598,7 +599,7 @@ impl App {
             );
             ui.add_space(10.0);
             ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-                if soft_button(ui, &p, "Abbrechen").clicked() {
+                if soft_button(ui, &p, tr!("Abbrechen", "Cancel")).clicked() {
                     cancel = true;
                 }
             });
@@ -619,12 +620,12 @@ impl App {
             JobResult::Ok(s) => {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(ic::CHECK_CIRCLE).size(28.0).color(p.good));
-                    ui.label(RichText::new("Backup fertig").family(semibold()).size(20.0));
+                    ui.label(RichText::new(tr!("Backup fertig", "Backup finished")).family(semibold()).size(20.0));
                 });
                 ui.add_space(4.0);
                 ui.label(
-                    RichText::new(format!(
-                        "{} geschrieben von ursprünglich {}. Dauer: {}",
+                    RichText::new(trf!(
+                        "{} geschrieben von ursprünglich {}. Dauer: {}", "{} written from originally {}. Duration: {}",
                         fmt_size(s.sectors as f64),
                         fmt_size(s.source_sectors),
                         fmt_duration(s.seconds)
@@ -634,8 +635,8 @@ impl App {
                 ui.label(RichText::new(s.path.display().to_string()).size(13.0).color(p.muted));
                 if !s.fits {
                     ui.label(
-                        RichText::new(format!(
-                            "{}  Das Ergebnis ist größer als das Ziel von {}.",
+                        RichText::new(trf!(
+                            "{}  Das Ergebnis ist größer als das Ziel von {}.", "{}  The result is larger than the target of {}.",
                             ic::WARNING,
                             fmt_size(s.target_sectors as f64)
                         ))
@@ -643,14 +644,14 @@ impl App {
                     );
                 }
                 if s.burn_started {
-                    ui.label(RichText::new("Der Windows-Brenner wurde geöffnet.").color(p.muted));
+                    ui.label(RichText::new(tr!("Der Windows-Brenner wurde geöffnet.", "The Windows disc burner has been opened.")).color(p.muted));
                 }
                 ui.add_space(10.0);
                 ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-                    if primary_button(ui, &p, "Schließen", true).clicked() {
+                    if primary_button(ui, &p, tr!("Schließen", "Close"), true).clicked() {
                         close = true;
                     }
-                    if soft_button(ui, &p, &format!("{}  Im Explorer zeigen", ic::FOLDER_OPEN)).clicked() {
+                    if soft_button(ui, &p, &trf!("{}  Im Explorer zeigen", "{}  Show in Explorer", ic::FOLDER_OPEN)).clicked() {
                         open_at = Some(s.path.clone());
                     }
                 });
@@ -658,7 +659,7 @@ impl App {
             JobResult::Failed(e) => {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(ic::X_CIRCLE).size(28.0).color(p.bad));
-                    ui.label(RichText::new("Backup fehlgeschlagen").family(semibold()).size(20.0));
+                    ui.label(RichText::new(tr!("Backup fehlgeschlagen", "Backup failed")).family(semibold()).size(20.0));
                 });
                 ui.add_space(4.0);
                 ui.label(RichText::new(e).color(p.muted));
@@ -670,8 +671,8 @@ impl App {
                 });
             }
             JobResult::Cancelled => {
-                ui.label(RichText::new("Backup abgebrochen").family(semibold()).size(20.0));
-                ui.label(RichText::new("Angefangene Dateien wurden entfernt.").color(p.muted));
+                ui.label(RichText::new(tr!("Backup abgebrochen", "Backup cancelled")).family(semibold()).size(20.0));
+                ui.label(RichText::new(tr!("Angefangene Dateien wurden entfernt.", "Partially written files have been removed.")).color(p.muted));
                 ui.add_space(10.0);
                 ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
                     if primary_button(ui, &p, "OK", true).clicked() {
@@ -697,16 +698,25 @@ impl App {
         let mut dark = p.dark;
         let dirs_before = (self.prefs.load_dir.clone(), self.prefs.save_dir.clone());
         modal(ctx, &p, "einstellungen", 520.0, |ui| {
-            ui.label(RichText::new("Einstellungen").family(semibold()).size(20.0));
+            ui.label(RichText::new(tr!("Einstellungen", "Settings")).family(semibold()).size(20.0));
             ui.add_space(4.0);
-            ui.label(RichText::new("Design").family(semibold()).size(13.0).color(p.muted));
+            // Sprachnamen jeweils in der eigenen Sprache, damit man sie immer findet
+            ui.label(RichText::new("Sprache / Language").family(semibold()).size(13.0).color(p.muted));
             let width = ui.available_width();
-            let opts = [(true, "Dunkel"), (false, "Hell")];
+            let mut ui_lang = discslim::i18n::lang();
+            let opts = [(Lang::De, "Deutsch"), (Lang::En, "English")];
+            if segmented(ui, &p, &mut ui_lang, &opts, width) {
+                discslim::i18n::set_lang(ui_lang);
+            }
+
+            ui.add_space(6.0);
+            ui.label(RichText::new(tr!("Design", "Theme")).family(semibold()).size(13.0).color(p.muted));
+            let opts = [(true, tr!("Dunkel", "Dark")), (false, tr!("Hell", "Light"))];
             segmented(ui, &p, &mut dark, &opts, width);
 
             ui.add_space(6.0);
-            ui.label(RichText::new("Sprachen").family(semibold()).size(13.0).color(p.muted));
-            style::check(ui, &p, &mut self.prefs.only_lang, "Beim Öffnen nur diese Sprache behalten");
+            ui.label(RichText::new(tr!("Ton- und Untertitelsprache", "Audio and subtitle language")).family(semibold()).size(13.0).color(p.muted));
+            style::check(ui, &p, &mut self.prefs.only_lang, tr!("Beim Öffnen nur diese Sprache behalten", "Keep only this language when opening"));
             ui.add_enabled_ui(self.prefs.only_lang, |ui| {
                 egui::ComboBox::from_id_salt("sprache").selected_text(lang_name(&self.prefs.lang)).show_ui(ui, |ui| {
                     for code in ["de", "en", "fr", "es", "it", "nl", "pl", "tr", "ru"] {
@@ -715,25 +725,25 @@ impl App {
                 });
             });
             ui.label(
-                RichText::new("Gibt es die Sprache auf der DVD nicht, bleiben alle Spuren ausgewählt.")
+                RichText::new(tr!("Gibt es die Sprache auf der DVD nicht, bleiben alle Spuren ausgewählt.", "If the DVD doesn't have this language, all tracks stay selected."))
                     .size(12.5)
                     .color(p.faint),
             );
 
             ui.add_space(6.0);
-            ui.label(RichText::new("Verzeichnisse").family(semibold()).size(13.0).color(p.muted));
+            ui.label(RichText::new(tr!("Verzeichnisse", "Folders")).family(semibold()).size(13.0).color(p.muted));
             for (label, value, title) in [
-                ("Laden", &mut self.prefs.load_dir, "Hauptverzeichnis zum Laden von DVDs, ISOs und Projekten"),
-                ("Speichern", &mut self.prefs.save_dir, "Hauptverzeichnis für Backups und Projekte"),
+                (tr!("Laden", "Load"), &mut self.prefs.load_dir, tr!("Hauptverzeichnis zum Laden von DVDs, ISOs und Projekten", "Main folder for loading DVDs, ISOs and projects")),
+                (tr!("Speichern", "Save"), &mut self.prefs.save_dir, tr!("Hauptverzeichnis für Backups und Projekte", "Main folder for backups and projects")),
             ] {
                 ui.horizontal(|ui| {
                     ui.add_sized([70.0, 24.0], egui::Label::new(RichText::new(label).color(p.muted)));
                     let edit = egui::TextEdit::singleline(value)
-                        .hint_text("nicht festgelegt")
+                        .hint_text(tr!("nicht festgelegt", "not set"))
                         .desired_width(ui.available_width() - 120.0)
                         .margin(Margin::symmetric(8, 5));
                     ui.add(edit);
-                    if ui.button(RichText::new(format!("{}  Wählen", ic::FOLDER_OPEN)).size(13.0)).clicked() {
+                    if ui.button(RichText::new(trf!("{}  Wählen", "{}  Choose", ic::FOLDER_OPEN)).size(13.0)).clicked() {
                         let mut d = rfd::FileDialog::new().set_title(title);
                         if Path::new(value.trim()).is_dir() {
                             d = d.set_directory(value.trim());
@@ -742,29 +752,29 @@ impl App {
                             *value = f.display().to_string();
                         }
                     }
-                    if !value.is_empty() && style::icon_button(ui, &p, ic::X, "Nicht mehr festlegen").clicked() {
+                    if !value.is_empty() && style::icon_button(ui, &p, ic::X, tr!("Nicht mehr festlegen", "Clear")).clicked() {
                         value.clear();
                     }
                 });
             }
             for v in [&self.prefs.load_dir, &self.prefs.save_dir] {
                 if !v.trim().is_empty() && !Path::new(v.trim()).is_dir() {
-                    ui.label(RichText::new(format!("{}  „{}“ gibt es nicht.", ic::WARNING, v.trim())).size(12.5).color(p.warn));
+                    ui.label(RichText::new(trf!("{}  „{}“ gibt es nicht.", "{}  \"{}\" does not exist.", ic::WARNING, v.trim())).size(12.5).color(p.warn));
                 }
             }
             ui.label(
-                RichText::new("Nach dem Start öffnen die Dateidialoge hier. Danach merkt sich das Programm den zuletzt gewählten Ort.")
+                RichText::new(tr!("Nach dem Start öffnen die Dateidialoge hier. Danach merkt sich das Programm den zuletzt gewählten Ort.", "After startup, file dialogs open here. After that, the program remembers the last location you chose."))
                     .size(12.5)
                     .color(p.faint),
             );
 
             ui.add_space(6.0);
             ui.label(RichText::new("Backup").family(semibold()).size(13.0).color(p.muted));
-            style::check(ui, &p, &mut self.prefs.deep_default, "Tiefenanalyse vor dem Backup vorschlagen");
+            style::check(ui, &p, &mut self.prefs.deep_default, tr!("Tiefenanalyse vor dem Backup vorschlagen", "Suggest deep analysis before backup"));
 
             ui.add_space(10.0);
             ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-                if primary_button(ui, &p, "Fertig", true).clicked() {
+                if primary_button(ui, &p, tr!("Fertig", "Done"), true).clicked() {
                     close = true;
                 }
             });
@@ -799,17 +809,17 @@ impl App {
             ui.add_space(4.0);
             ui.label(
                 RichText::new(
-                    "Verkleinert eigene, ungeschützte Video-DVDs, damit sie auf einen Rohling passen. Das Bild wird dabei neu quantisiert, nicht komplett neu kodiert. Das geht schnell, und Struktur und Menüs bleiben erhalten.",
+                    tr!("Verkleinert eigene, ungeschützte Video-DVDs, damit sie auf einen Rohling passen. Das Bild wird dabei neu quantisiert, nicht komplett neu kodiert. Das geht schnell, und Struktur und Menüs bleiben erhalten.", "Shrinks your own unprotected video DVDs so they fit on a blank disc. The video is requantised rather than fully re-encoded. This is fast, and structure and menus are preserved."),
                 )
                 .color(p.muted),
             );
             ui.add_space(6.0);
             ui.label(
-                RichText::new("Kopiergeschützte DVDs (CSS) werden erkannt und nicht verarbeitet.").size(13.0).color(p.faint),
+                RichText::new(tr!("Kopiergeschützte DVDs (CSS) werden erkannt und nicht verarbeitet.", "Copy-protected DVDs (CSS) are detected and not processed.")).size(13.0).color(p.faint),
             );
             ui.add_space(10.0);
             ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-                if primary_button(ui, &p, "Schließen", true).clicked() {
+                if primary_button(ui, &p, tr!("Schließen", "Close"), true).clicked() {
                     close = true;
                 }
             });
@@ -840,7 +850,7 @@ pub(super) fn sanitize(label: &str) -> String {
     if s == "DVD" && label.trim().is_empty() {
         s
     } else {
-        format!("{s} (klein)")
+        trf!("{s} (klein)", "{s} (small)")
     }
 }
 
@@ -935,8 +945,8 @@ fn vob_rows(disc: &Disc, plan: &Plan) -> Vec<String> {
             .titles
             .iter()
             .map(|t| {
-                let kind = if t.category == Category::MainMovie { "Hauptfilm" } else { "Extra" };
-                format!("{kind} · Titel {} · {}", t.number, fmt_time(t.ms))
+                let kind = if t.category == Category::MainMovie { tr!("Hauptfilm", "Main movie") } else { tr!("Extra", "Extra") };
+                trf!("{kind} · Titel {} · {}", "{kind} · Title {} · {}", t.number, fmt_time(t.ms))
             })
             .collect(),
         Mode::Reauthor => plan
@@ -945,7 +955,7 @@ fn vob_rows(disc: &Disc, plan: &Plan) -> Vec<String> {
             .enumerate()
             .filter_map(|(i, e)| {
                 let t = disc.titles.get(e.title)?;
-                Some(format!("{}. Titel {} · Kapitel {} bis {}", i + 1, t.number, e.first_chapter + 1, e.last_chapter + 1))
+                Some(trf!("{}. Titel {} · Kapitel {} bis {}", "{}. Title {} · Chapters {} to {}", i + 1, t.number, e.first_chapter + 1, e.last_chapter + 1))
             })
             .collect(),
     }

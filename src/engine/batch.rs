@@ -198,7 +198,7 @@ fn worker(items: Arc<Mutex<Vec<BatchItem>>>, stop: Arc<AtomicBool>, cancel: Arc<
             list.iter_mut().find(|i| matches!(i.status, Status::Waiting)).map(|i| {
                 i.status = Status::Running;
                 i.fraction = 0.0;
-                i.stage = "DVD wird geöffnet …".into();
+                i.stage = tr!("DVD wird geöffnet …", "Opening DVD …").into();
                 i.clone()
             })
         };
@@ -212,7 +212,7 @@ fn worker(items: Arc<Mutex<Vec<BatchItem>>>, stop: Arc<AtomicBool>, cancel: Arc<
             notify();
         };
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_item(&job, &cancel, &update)))
-            .unwrap_or_else(|_| Err("Interner Fehler bei der Verarbeitung.".into()));
+            .unwrap_or_else(|_| Err(tr!("Interner Fehler bei der Verarbeitung.", "Internal error during processing.").into()));
         let status = match result {
             Ok(s) => Status::Done(s),
             Err(e) if e == CANCELLED => Status::Cancelled,
@@ -237,7 +237,7 @@ fn run_item(job: &BatchItem, cancel: &Arc<AtomicBool>, update: &dyn Fn(&dyn Fn(&
     let source = Source::open(&job.source)?;
     let mut disc = Disc::open(source)?;
     if disc.check_scrambled() {
-        return Err(COPY_PROTECTED.into());
+        return Err(copy_protected().into());
     }
     let mut cb = |f: f32, t: &str| -> bool {
         let text = t.to_string();
@@ -249,21 +249,21 @@ fn run_item(job: &BatchItem, cancel: &Arc<AtomicBool>, update: &dyn Fn(&dyn Fn(&
     };
     let scrambled = disc.analyse(false, &mut cb).map_err(|e| if cancel.load(Ordering::Relaxed) { CANCELLED.into() } else { e })?;
     if scrambled {
-        return Err(COPY_PROTECTED.into());
+        return Err(copy_protected().into());
     }
     let plan = plan_for(&job.plan, &disc)?;
     // Zielordner anlegen, falls es ihn noch nicht gibt
     let target = job.output_path();
     let dir = if matches!(job.output, Output::Folder(_)) { Some(target) } else { target.parent() };
     if let Some(dir) = dir.filter(|d| !d.as_os_str().is_empty()) {
-        std::fs::create_dir_all(dir).map_err(|e| format!("Zielordner {}: {e}", dir.display()))?;
+        std::fs::create_dir_all(dir).map_err(|e| trf!("Zielordner {}: {e}", "Target folder {}: {e}", dir.display()))?;
     }
 
     let (tx, rx) = channel();
     let req = BackupRequest { disc: Arc::new(disc), plan, output: job.output.clone(), deep_analysis: job.deep_analysis };
     let c2 = cancel.clone();
     let worker = std::thread::spawn(move || backup::run(req, tx, c2));
-    let mut result = Err("Das Backup hat sich nicht zurückgemeldet.".to_string());
+    let mut result = Err(tr!("Das Backup hat sich nicht zurückgemeldet.", "The backup did not report back.").to_string());
     for m in rx.iter() {
         match m {
             BackupMsg::Stage(s) => update(&|i| i.stage = s.clone()),
@@ -282,7 +282,7 @@ pub fn plan_for(src: &PlanSource, disc: &Disc) -> Res<Plan> {
     match src {
         PlanSource::Fixed { plan, fingerprint } => {
             if !fingerprint.matches(&Fingerprint::of(disc)) {
-                return Err("Die DVD passt nicht mehr zu den gespeicherten Einstellungen (Titel oder Kapitel weichen ab).".into());
+                return Err(tr!("Die DVD passt nicht mehr zu den gespeicherten Einstellungen (Titel oder Kapitel weichen ab).", "The DVD no longer matches the saved settings (titles or chapters differ).").into());
             }
             project::validate(plan, disc)?;
             Ok((**plan).clone())
@@ -301,4 +301,6 @@ pub fn plan_for(src: &PlanSource, disc: &Disc) -> Res<Plan> {
     }
 }
 
-const COPY_PROTECTED: &str = "Diese DVD ist kopiergeschützt (CSS) und wird nicht verarbeitet.";
+fn copy_protected() -> &'static str {
+    tr!("Diese DVD ist kopiergeschützt (CSS) und wird nicht verarbeitet.", "This DVD is copy-protected (CSS) and will not be processed.")
+}

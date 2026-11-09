@@ -106,19 +106,19 @@ impl Project {
     }
 
     pub fn save(&self, path: &Path) -> Res<()> {
-        let text = serde_json::to_string_pretty(self).map_err(|e| format!("Projekt nicht speicherbar: {e}"))?;
+        let text = serde_json::to_string_pretty(self).map_err(|e| trf!("Projekt nicht speicherbar: {e}", "Project cannot be saved: {e}"))?;
         std::fs::write(path, text).map_err(|e| format!("{}: {e}", path.display()))
     }
 
     pub fn load(path: &Path) -> Res<Project> {
         let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let p: Project = serde_json::from_str(&text)
-            .map_err(|e| format!("{} ist keine gültige Projektdatei ({e}).", path.display()))?;
+            .map_err(|e| trf!("{} ist keine gültige Projektdatei ({e}).", "{} is not a valid project file ({e}).", path.display()))?;
         if p.format != FORMAT {
-            return Err(format!("{} ist keine Projektdatei des DVDmanagers.", path.display()));
+            return Err(trf!("{} ist keine Projektdatei des DVDmanagers.", "{} is not a DVDmanager project file.", path.display()));
         }
         if p.version > VERSION {
-            return Err("Die Projektdatei stammt von einer neueren Programmversion.".into());
+            return Err(tr!("Die Projektdatei stammt von einer neueren Programmversion.", "The project file comes from a newer program version.").into());
         }
         Ok(p)
     }
@@ -131,8 +131,8 @@ impl Project {
     /// Der gespeicherte Plan, geprüft gegen die tatsächlich geöffnete DVD.
     pub fn plan_for(&self, disc: &Disc) -> Res<Plan> {
         if !self.fingerprint.matches(&Fingerprint::of(disc)) {
-            return Err(format!(
-                "Das Projekt gehört zu einer anderen DVD („{}“). Titel oder Kapitel stimmen nicht überein.",
+            return Err(trf!(
+                "Das Projekt gehört zu einer anderen DVD („{}“). Titel oder Kapitel stimmen nicht überein.", "The project belongs to a different DVD (\"{}\"). Titles or chapters do not match.",
                 self.label
             ));
         }
@@ -147,16 +147,16 @@ pub fn validate(plan: &Plan, disc: &Disc) -> Res<()> {
     for id in plan.items.keys() {
         if let ItemId::Title(i) = id {
             if *i >= disc.titles.len() {
-                return Err(format!("Das Projekt nennt Titel {}, den es auf der DVD nicht gibt.", i + 1));
+                return Err(trf!("Das Projekt nennt Titel {}, den es auf der DVD nicht gibt.", "The project refers to title {}, which does not exist on the DVD.", i + 1));
             }
         }
     }
     for (n, e) in plan.reauthor.iter().enumerate() {
         let Some(t) = disc.titles.get(e.title) else {
-            return Err(format!("Eintrag {} verweist auf einen fehlenden Titel.", n + 1));
+            return Err(trf!("Eintrag {} verweist auf einen fehlenden Titel.", "Entry {} refers to a missing title.", n + 1));
         };
         if e.first_chapter > e.last_chapter || e.last_chapter >= t.chapters.len() {
-            return Err(format!("Eintrag {} verweist auf fehlende Kapitel.", n + 1));
+            return Err(trf!("Eintrag {} verweist auf fehlende Kapitel.", "Entry {} refers to missing chapters.", n + 1));
         }
     }
     Ok(())

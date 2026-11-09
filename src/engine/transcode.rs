@@ -50,7 +50,7 @@ impl VobuReader {
             self.chunk_start = n;
             self.chunk_count = got as u64;
             if got == 0 {
-                return Err("Unerwartetes Ende der VOB-Daten".into());
+                return Err(tr!("Unerwartetes Ende der VOB-Daten", "Unexpected end of VOB data").into());
             }
         }
         let o = ((n - self.chunk_start) as usize) * SECTOR;
@@ -147,7 +147,7 @@ impl SpaceWriter {
             let cap = if self.single || !self.split { u64::MAX } else { VOB_PART_SECTORS };
             if self.file.is_none() || self.in_part >= cap {
                 if self.part_no >= 9 && !self.single {
-                    return Err("Die Ausgabe ist für neun VOB-Teile zu groß.".into());
+                    return Err(tr!("Die Ausgabe ist für neun VOB-Teile zu groß.", "The output is too large for nine VOB parts.").into());
                 }
                 self.open_next()?;
             }
@@ -156,9 +156,9 @@ impl SpaceWriter {
             let (a, b) = rest.split_at(n * SECTOR);
             self.file.as_mut().unwrap().write_all(a).map_err(|e| {
                 if e.raw_os_error() == Some(112) {
-                    "Auf dem Zieldatenträger ist nicht genug Platz.".to_string()
+                    tr!("Auf dem Zieldatenträger ist nicht genug Platz.", "There is not enough space on the target drive.").to_string()
                 } else {
-                    format!("Schreibfehler: {e}")
+                    trf!("Schreibfehler: {e}", "Write error: {e}")
                 }
             })?;
             self.in_part += n as u64;

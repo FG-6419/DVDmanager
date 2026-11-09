@@ -30,11 +30,11 @@ impl FileRef {
     fn open(&self) -> Res<(File, u64)> {
         match self {
             FileRef::Disk(p) => {
-                let f = File::open(p).map_err(|e| format!("{} kann nicht geöffnet werden: {e}", p.display()))?;
+                let f = File::open(p).map_err(|e| trf!("{} kann nicht geöffnet werden: {e}", "{} cannot be opened: {e}", p.display()))?;
                 Ok((f, 0))
             }
             FileRef::Iso { path, offset, .. } => {
-                let f = File::open(path).map_err(|e| format!("{} kann nicht geöffnet werden: {e}", path.display()))?;
+                let f = File::open(path).map_err(|e| trf!("{} kann nicht geöffnet werden: {e}", "{} cannot be opened: {e}", path.display()))?;
                 Ok((f, *offset))
             }
         }
@@ -86,7 +86,7 @@ impl Source {
             files.insert(name.to_ascii_uppercase(), FileRef::Iso { path: path.to_path_buf(), offset, len });
         }
         if !files.contains_key("VIDEO_TS.IFO") {
-            return Err("Im ISO-Abbild gibt es keine VIDEO_TS.IFO. Es ist wohl keine Video-DVD.".into());
+            return Err(tr!("Im ISO-Abbild gibt es keine VIDEO_TS.IFO. Es ist wohl keine Video-DVD.", "The ISO image has no VIDEO_TS.IFO. It is probably not a video DVD.").into());
         }
         let label = if label.trim().is_empty() { file_label(path) } else { label };
         Ok(Source { label, origin: path.to_path_buf(), files: Arc::new(files) })
@@ -94,7 +94,7 @@ impl Source {
 
     fn open_dir(path: &Path) -> Res<Source> {
         let dir = find_video_ts_dir(path).ok_or_else(|| {
-            format!("In „{}“ wurde keine DVD-Struktur gefunden (VIDEO_TS.IFO fehlt).", path.display())
+            trf!("In „{}“ wurde keine DVD-Struktur gefunden (VIDEO_TS.IFO fehlt).", "No DVD structure was found in \"{}\" (VIDEO_TS.IFO is missing).", path.display())
         })?;
         let mut files = HashMap::new();
         let rd = std::fs::read_dir(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -105,7 +105,7 @@ impl Source {
             }
         }
         if !files.contains_key("VIDEO_TS.IFO") {
-            return Err(format!("In „{}“ fehlt die Datei VIDEO_TS.IFO.", dir.display()));
+            return Err(trf!("In „{}“ fehlt die Datei VIDEO_TS.IFO.", "The file VIDEO_TS.IFO is missing in \"{}\".", dir.display()));
         }
         let base = if dir.file_name().map(|n| n.eq_ignore_ascii_case("VIDEO_TS")).unwrap_or(false) {
             dir.parent().unwrap_or(&dir).to_path_buf()
@@ -132,7 +132,7 @@ impl Source {
     }
 
     fn read_exact_file(&self, name: &str) -> Res<Vec<u8>> {
-        let r = self.files.get(name).ok_or_else(|| format!("{name} fehlt"))?;
+        let r = self.files.get(name).ok_or_else(|| trf!("{name} fehlt", "{name} is missing"))?;
         let (mut f, off) = r.open()?;
         f.seek(SeekFrom::Start(off)).map_err(|e| format!("{name}: {e}"))?;
         let mut v = vec![0u8; r.len() as usize];
@@ -243,8 +243,8 @@ impl SpaceReader {
             f.seek(SeekFrom::Start(*base + in_part * SECTOR as u64)).map_err(|e| e.to_string())?;
             let slice = &mut buf[done * SECTOR..(done + take) * SECTOR];
             f.read_exact(slice).map_err(|e| {
-                format!(
-                    "Lesefehler bei Sektor {sec}: {e}. Falls das eine Kauf-DVD ist, verhindert vermutlich der Kopierschutz das Lesen."
+                trf!(
+                    "Lesefehler bei Sektor {sec}: {e}. Falls das eine Kauf-DVD ist, verhindert vermutlich der Kopierschutz das Lesen.", "Read error at sector {sec}: {e}. If this is a commercial DVD, copy protection is probably preventing it from being read."
                 )
             })?;
             done += take;

@@ -398,7 +398,7 @@ fn chapter_list(disc: &Disc, title: usize, first: usize, last: usize) -> Vec<(u6
         .enumerate()
         .take(last + 1)
         .skip(first)
-        .map(|(i, c)| (c.start_ms.saturating_sub(base), format!("Kapitel {}", i + 1)))
+        .map(|(i, c)| (c.start_ms.saturating_sub(base), trf!("Kapitel {}", "Chapter {}", i + 1)))
         .collect()
 }
 impl App {
@@ -471,8 +471,8 @@ impl App {
     fn custom_chapters(&self, sel: Selection) -> Option<Vec<(u64, String)>> {
         let Selection::Entry(i) = sel else { return None };
         let marks = self.plan.reauthor.get(i)?.chapter_marks.as_ref()?;
-        let mut out = vec![(0, "Kapitel 1".to_string())];
-        out.extend(marks.iter().enumerate().map(|(k, m)| (*m, format!("Kapitel {}", k + 2))));
+        let mut out = vec![(0, tr!("Kapitel 1", "Chapter 1").to_string())];
+        out.extend(marks.iter().enumerate().map(|(k, m)| (*m, trf!("Kapitel {}", "Chapter {}", k + 2))));
         Some(out)
     }
 
@@ -747,7 +747,7 @@ impl App {
                 Color32::WHITE,
             );
         } else {
-            let text = if st.segments.is_empty() { "Für diese Auswahl gibt es keine Vorschau" } else { "Vorschau wird geladen …" };
+            let text = if st.segments.is_empty() { tr!("Für diese Auswahl gibt es keine Vorschau", "No preview is available for this selection") } else { tr!("Vorschau wird geladen …", "Loading preview …") };
             ui.painter().text(
                 screen.center() - Vec2::new(0.0, 14.0),
                 Align2::CENTER_CENTER,
@@ -819,7 +819,7 @@ impl App {
                 let (offs, _) = st.prog_offsets();
                 let g = f64::from(f * span);
                 let k = offs.iter().rposition(|o| *o <= g).unwrap_or(0);
-                resp.clone().on_hover_text(format!("Eintrag {} · {}", k + 1, fmt_time(g as u64)));
+                resp.clone().on_hover_text(trf!("Eintrag {} · {}", "Entry {} · {}", k + 1, fmt_time(g as u64)));
             } else {
                 // Kapitel unter dem Mauszeiger nennen
                 let at = (lo + f64::from(f * span)) as u64;
@@ -852,15 +852,15 @@ impl App {
         if let Some((entry, at)) = ctx_target {
             resp.context_menu(|ui| {
                 ui.label(
-                    RichText::new(format!("Eintrag {} · {}", entry + 1, super::views::fmt_time_precise(at)))
+                    RichText::new(trf!("Eintrag {} · {}", "Entry {} · {}", entry + 1, super::views::fmt_time_precise(at)))
                         .size(12.5)
                         .color(p.muted),
                 );
-                if ui.button(format!("{}  Schnittanfang hier setzen", ic::BRACKETS_SQUARE)).clicked() {
+                if ui.button(trf!("{}  Schnittanfang hier setzen", "{}  Set cut start here", ic::BRACKETS_SQUARE)).clicked() {
                     cut_action = Some((entry, true, at));
                     ui.close();
                 }
-                if ui.button(format!("{}  Schnittende hier setzen", ic::BRACKETS_SQUARE)).clicked() {
+                if ui.button(trf!("{}  Schnittende hier setzen", "{}  Set cut end here", ic::BRACKETS_SQUARE)).clicked() {
                     cut_action = Some((entry, false, at));
                     ui.close();
                 }
@@ -884,7 +884,7 @@ impl App {
             let enabled = !st.segments.is_empty();
             let exact = st.step_exact;
             let cur = st.time_ms.unwrap_or(0);
-            let prev_tip = if prog_mode { "Zum vorigen Eintrag" } else { "Zum vorigen Kapitel" };
+            let prev_tip = if prog_mode { tr!("Zum vorigen Eintrag", "Previous entry") } else { tr!("Zum vorigen Kapitel", "Previous chapter") };
             if super::style::icon_button(ui, &p, ic::SKIP_BACK, prev_tip).clicked() && enabled {
                 if prog_mode {
                     let k = st.prog_cur;
@@ -901,9 +901,9 @@ impl App {
                 }
             }
             let (back_tip, fwd_tip) = if exact {
-                ("Ein Bild zurück (gedrückt halten: fortlaufend)", "Ein Bild weiter (gedrückt halten: fortlaufend)")
+                (tr!("Ein Bild zurück (gedrückt halten: fortlaufend)", "One frame back (hold: continuous)"), tr!("Ein Bild weiter (gedrückt halten: fortlaufend)", "One frame forward (hold: continuous)"))
             } else {
-                ("Ein Schlüsselbild zurück (gedrückt halten: fortlaufend)", "Ein Schlüsselbild weiter (gedrückt halten: fortlaufend)")
+                (tr!("Ein Schlüsselbild zurück (gedrückt halten: fortlaufend)", "One keyframe back (hold: continuous)"), tr!("Ein Schlüsselbild weiter (gedrückt halten: fortlaufend)", "One keyframe forward (hold: continuous)"))
             };
             let r = super::style::icon_button(ui, &p, ic::CARET_LEFT, back_tip);
             st.hold_step(&r, -1, enabled);
@@ -913,7 +913,7 @@ impl App {
                 .stroke(egui::Stroke::NONE)
                 .corner_radius(CornerRadius::same(18))
                 .min_size(Vec2::splat(36.0));
-            if ui.add_enabled(enabled, b).on_hover_text(if st.playing { "Anhalten" } else { "Abspielen" }).clicked() {
+            if ui.add_enabled(enabled, b).on_hover_text(if st.playing { tr!("Anhalten", "Pause") } else { tr!("Abspielen", "Play") }).clicked() {
                 let on = !st.playing;
                 st.set_playing(on);
                 st.next_at = None;
@@ -929,7 +929,7 @@ impl App {
             }
             let r = super::style::icon_button(ui, &p, ic::CARET_RIGHT, fwd_tip);
             st.hold_step(&r, 1, enabled);
-            let next_tip = if prog_mode { "Zum nächsten Eintrag" } else { "Zum nächsten Kapitel" };
+            let next_tip = if prog_mode { tr!("Zum nächsten Eintrag", "Next entry") } else { tr!("Zum nächsten Kapitel", "Next chapter") };
             if super::style::icon_button(ui, &p, ic::SKIP_FORWARD, next_tip).clicked() && enabled {
                 if prog_mode && st.prog_cur + 1 < st.prog.len() {
                     let k = st.prog_cur + 1;
@@ -958,16 +958,16 @@ impl App {
             let secs = (*jump_secs).max(1);
             if ui
                 .add_enabled(enabled, egui::Button::new(RichText::new(format!("{}  {secs} s", ic::CARET_DOUBLE_LEFT)).size(13.0)))
-                .on_hover_text(format!("{secs} Sekunden zurück"))
+                .on_hover_text(trf!("{secs} Sekunden zurück", "{secs} seconds back"))
                 .clicked()
             {
                 st.jump(-f64::from(secs) * 1000.0);
             }
             ui.add(egui::DragValue::new(jump_secs).range(1..=600).suffix(" s").speed(0.5))
-                .on_hover_text("Sprungweite in Sekunden");
+                .on_hover_text(tr!("Sprungweite in Sekunden", "Jump size in seconds"));
             if ui
                 .add_enabled(enabled, egui::Button::new(RichText::new(format!("{secs} s  {}", ic::CARET_DOUBLE_RIGHT)).size(13.0)))
-                .on_hover_text(format!("{secs} Sekunden vor"))
+                .on_hover_text(trf!("{secs} Sekunden vor", "{secs} seconds forward"))
                 .clicked()
             {
                 st.jump(f64::from(secs) * 1000.0);
@@ -984,10 +984,10 @@ impl App {
                 fmt_time(g_total as u64)
             );
             if prog_mode {
-                text.push_str(&format!("  ·  Eintrag {} von {}", st.prog_cur + 1, st.prog.len()));
+                text.push_str(&trf!("  ·  Eintrag {} von {}", "  ·  Entry {} of {}", st.prog_cur + 1, st.prog.len()));
             } else if st.window.is_none() {
                 if let Some(len) = st.cut_len {
-                    text.push_str(&format!("  ·  Schnitt {}", fmt_time(len)));
+                    text.push_str(&trf!("  ·  Schnitt {}", "  ·  Cut {}", fmt_time(len)));
                 }
             }
             ui.label(RichText::new(text).size(13.0).color(p.muted));
@@ -1010,14 +1010,14 @@ impl App {
         // Zweite Zeile: Ansicht, Ton, Kompression
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                super::style::check(ui, &p, &mut st.compressed, "Mit gewählter Kompression");
+                super::style::check(ui, &p, &mut st.compressed, tr!("Mit gewählter Kompression", "With chosen compression"));
                 if can_all || st.cut_len.is_some() {
                     let mut view: u8 = if st.program { 2 } else if st.cut_view { 1 } else { 0 };
                     let before = view;
                     if can_all {
-                        super::style::segmented(ui, &p, &mut view, &[(0, "Ganzer Titel"), (1, "Nur Schnitt"), (2, "Alle Schnitte")], 300.0);
+                        super::style::segmented(ui, &p, &mut view, &[(0, tr!("Ganzer Titel", "Whole title")), (1, tr!("Nur Schnitt", "Cut only")), (2, tr!("Alle Schnitte", "All cuts"))], 300.0);
                     } else {
-                        super::style::segmented(ui, &p, &mut view, &[(0, "Ganzer Titel"), (1, "Nur Schnitt")], 200.0);
+                        super::style::segmented(ui, &p, &mut view, &[(0, tr!("Ganzer Titel", "Whole title")), (1, tr!("Nur Schnitt", "Cut only"))], 200.0);
                     }
                     if view != before {
                         st.cut_view = view == 1;
@@ -1036,7 +1036,7 @@ impl App {
                 }
                 if let Some(bus) = st.audio.clone() {
                     let muted = bus.muted();
-                    let (icon, tip) = if muted { (ic::SPEAKER_SLASH, "Ton einschalten") } else { (ic::SPEAKER_HIGH, "Ton ausschalten") };
+                    let (icon, tip) = if muted { (ic::SPEAKER_SLASH, tr!("Ton einschalten", "Unmute")) } else { (ic::SPEAKER_HIGH, tr!("Ton ausschalten", "Mute")) };
                     if super::style::icon_button(ui, &p, icon, tip).clicked() {
                         bus.set_muted(!muted);
                     }

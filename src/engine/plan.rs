@@ -49,10 +49,10 @@ impl Smoothing {
 
     pub fn label(self) -> &'static str {
         match self {
-            Smoothing::Off => "Aus",
-            Smoothing::Low => "Leicht",
-            Smoothing::Medium => "Mittel",
-            Smoothing::High => "Stark",
+            Smoothing::Off => tr!("Aus", "Off"),
+            Smoothing::Low => tr!("Leicht", "Light"),
+            Smoothing::Medium => tr!("Mittel", "Medium"),
+            Smoothing::High => tr!("Stark", "Strong"),
         }
     }
 }
@@ -527,10 +527,10 @@ pub fn fmt_size(sectors: f64) -> String {
     let bytes = sectors * SECTOR as f64;
     let mb = bytes / (1024.0 * 1024.0);
     if mb >= 1024.0 {
-        format!("{:.2} GB", mb / 1024.0).replace('.', ",")
+        crate::i18n::decimal(format!("{:.2} GB", mb / 1024.0))
     } else if mb >= 10.0 {
         format!("{mb:.0} MB")
     } else {
-        format!("{mb:.1} MB").replace('.', ",")
+        crate::i18n::decimal(format!("{mb:.1} MB"))
     }
 }

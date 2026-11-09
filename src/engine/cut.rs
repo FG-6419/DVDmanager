@@ -98,7 +98,7 @@ pub fn rebuild_vobu(prev: Option<&[u8]>, data: &[u8], from_ms: Option<f64>, unti
         }
     }
     if frames.is_empty() {
-        return Err("Die Bilder an der Schnittstelle ließen sich nicht dekodieren.".into());
+        return Err(tr!("Die Bilder an der Schnittstelle ließen sich nicht dekodieren.", "The frames at the cut point could not be decoded.").into());
     }
     let total = frames.len();
     let frame_ms = frames[0].1.frame_ms;
@@ -262,8 +262,8 @@ pub fn entry_stream<'a>(
     entry: &ReauthorEntry,
     mut sink: impl FnMut(StreamEvent<'a>) -> Res<()>,
 ) -> Res<()> {
-    let t = disc.titles.get(entry.title).ok_or("Titel nicht gefunden")?;
-    let v = disc.vts.get(&t.vts).ok_or("Titelset nicht gefunden")?;
+    let t = disc.titles.get(entry.title).ok_or(tr!("Titel nicht gefunden", "Title not found"))?;
+    let v = disc.vts.get(&t.vts).ok_or(tr!("Titelset nicht gefunden", "Title set not found"))?;
     let first_idx = t.chapters.get(entry.first_chapter).map(|c| c.first_cell_idx).unwrap_or(0);
     let end_idx = t.chapters.get(entry.last_chapter + 1).map(|c| c.first_cell_idx).unwrap_or(t.cells.len());
     let (cut_in, cut_out) = entry.cut.effective(crate::engine::plan::entry_duration_ms(disc, entry));

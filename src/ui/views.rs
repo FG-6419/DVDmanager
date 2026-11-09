@@ -30,10 +30,10 @@ fn stat_sum_subs(s: &CellStats, keep: &[bool; 32]) -> f64 {
 
 fn mode_label(m: VideoMode) -> &'static str {
     match m {
-        VideoMode::Keep => "Unverändert",
-        VideoMode::Auto => "Automatisch",
-        VideoMode::Custom(_) => "Eigener Wert",
-        VideoMode::Still => "Standbild",
+        VideoMode::Keep => tr!("Unverändert", "Unchanged"),
+        VideoMode::Auto => tr!("Automatisch", "Automatic"),
+        VideoMode::Custom(_) => tr!("Eigener Wert", "Custom value"),
+        VideoMode::Still => tr!("Standbild", "Still image"),
     }
 }
 
@@ -44,21 +44,22 @@ fn percent(v: f64) -> String {
 /// Zeit mit Hundertstelsekunden, für Schnittmarken.
 pub fn fmt_time_precise(ms: u64) -> String {
     let s = ms / 1000;
-    format!("{}:{:02}:{:02},{:02}", s / 3600, (s / 60) % 60, s % 60, (ms % 1000) / 10)
+    let sep = if discslim::i18n::is_en() { '.' } else { ',' };
+    format!("{}:{:02}:{:02}{sep}{:02}", s / 3600, (s / 60) % 60, s % 60, (ms % 1000) / 10)
 }
 
 /// Einfache Qualitätseinschätzung für eine Verkleinerung.
 pub fn quality_word(ratio: f32) -> (&'static str, usize) {
     if ratio >= 0.97 {
-        ("Original", 0)
+        (tr!("Original", "Original"), 0)
     } else if ratio >= 0.8 {
-        ("Sehr gut", 0)
+        (tr!("Sehr gut", "Very good"), 0)
     } else if ratio >= 0.65 {
-        ("Gut", 0)
+        (tr!("Gut", "Good"), 0)
     } else if ratio >= 0.5 {
-        ("Mittel", 1)
+        (tr!("Mittel", "Medium"), 1)
     } else {
-        ("Sichtbare Verluste", 2)
+        (tr!("Sichtbare Verluste", "Visible losses"), 2)
     }
 }
 
@@ -91,7 +92,7 @@ impl App {
                     if has_disc {
                         ui.add_space(14.0);
                         let mut mode = self.plan.mode;
-                        let opts = [(Mode::FullDisc, "Ganze DVD"), (Mode::Reauthor, "Neu zusammenstellen")];
+                        let opts = [(Mode::FullDisc, tr!("Ganze DVD", "Whole DVD")), (Mode::Reauthor, tr!("Neu zusammenstellen", "Re-author"))];
                         if segmented(ui, &p, &mut mode, &opts, 310.0) {
                             self.plan.mode = mode;
                             self.sel = match mode {
@@ -111,7 +112,7 @@ impl App {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if has_disc {
                             let ok = self.can_start_backup();
-                            if primary_button(ui, &p, &format!("{}  Backup erstellen", ic::DOWNLOAD_SIMPLE), ok)
+                            if primary_button(ui, &p, &trf!("{}  Backup erstellen", "{}  Create backup", ic::DOWNLOAD_SIMPLE), ok)
                                 .clicked()
                             {
                                 self.open_backup_dialog();
@@ -119,41 +120,41 @@ impl App {
                         }
                         self.queue_badge(ui);
                         let theme_icon = if p.dark { ic::SUN } else { ic::MOON };
-                        if style::icon_button(ui, &p, theme_icon, "Design wechseln").clicked() {
+                        if style::icon_button(ui, &p, theme_icon, tr!("Design wechseln", "Switch theme")).clicked() {
                             let d = !p.dark;
                             self.set_dark(ctx, d);
                         }
-                        if style::icon_button(ui, &p, ic::GEAR_SIX, "Einstellungen").clicked() {
+                        if style::icon_button(ui, &p, ic::GEAR_SIX, tr!("Einstellungen", "Settings")).clicked() {
                             self.settings_open = true;
                         }
-                        if style::icon_button(ui, &p, ic::INFO, "Über dieses Programm").clicked() {
+                        if style::icon_button(ui, &p, ic::INFO, tr!("Über dieses Programm", "About this program")).clicked() {
                             self.about_open = true;
                         }
                         if has_disc {
                             let full = self.disc.as_ref().map(|d| d.analysed_full).unwrap_or(false);
                             let tip = if full {
-                                "Die Tiefenanalyse ist bereits erledigt"
+                                tr!("Die Tiefenanalyse ist bereits erledigt", "The deep analysis is already done")
                             } else {
-                                "Liest die ganze DVD für genaue Größenangaben. Sonst genügt eine Stichprobe."
+                                tr!("Liest die ganze DVD für genaue Größenangaben. Sonst genügt eine Stichprobe.", "Reads the whole DVD for exact sizes. Otherwise a sample is enough.")
                             };
                             if style::icon_button(ui, &p, ic::MAGNIFYING_GLASS, tip).clicked() && !full {
                                 self.deep_analyse(ctx);
                             }
                             let save_tip = match &self.project_path {
-                                Some(p) => format!("Projekt speichern (Strg+S)\n{}\nRechtsklick: Speichern unter …", p.display()),
-                                None => "Projekt speichern: Auswahl, Schnitte, Kapitel und Kompression (Strg+S)".to_string(),
+                                Some(p) => trf!("Projekt speichern (Strg+S)\n{}\nRechtsklick: Speichern unter …", "Save project (Ctrl+S)\n{}\nRight-click: Save as …", p.display()),
+                                None => tr!("Projekt speichern: Auswahl, Schnitte, Kapitel und Kompression (Strg+S)", "Save project: selection, cuts, chapters and compression (Ctrl+S)").to_string(),
                             };
                             let r = style::icon_button(ui, &p, ic::FLOPPY_DISK, &save_tip);
                             if r.clicked() {
                                 self.save_project(false);
                             }
                             r.context_menu(|ui| {
-                                if ui.button(format!("{}  Speichern unter …", ic::FLOPPY_DISK)).clicked() {
+                                if ui.button(trf!("{}  Speichern unter …", "{}  Save as …", ic::FLOPPY_DISK)).clicked() {
                                     self.save_project(true);
                                     ui.close();
                                 }
                             });
-                            if style::icon_button(ui, &p, ic::FOLDER_OPEN, "Andere DVD öffnen").clicked() {
+                            if style::icon_button(ui, &p, ic::FOLDER_OPEN, tr!("Andere DVD öffnen", "Open another DVD")).clicked() {
                                 self.disc = None;
                                 self.preview.stop();
                                 self.sel = Selection::None;
@@ -199,9 +200,9 @@ impl App {
                     ui.add_space((area.height() * 0.09).clamp(16.0, 80.0));
                     ui.label(RichText::new(ic::DISC).size(66.0).color(p.accent));
                     ui.add_space(4.0);
-                    ui.label(RichText::new("DVD öffnen und passend verkleinern").family(semibold()).size(26.0));
+                    ui.label(RichText::new(tr!("DVD öffnen und passend verkleinern", "Open a DVD and shrink it to fit")).family(semibold()).size(26.0));
                     ui.label(
-                        RichText::new("Hauptfilm behalten, Überflüssiges abwählen, und alles passt auf einen Rohling.")
+                        RichText::new(tr!("Hauptfilm behalten, Überflüssiges abwählen, und alles passt auf einen Rohling.", "Keep the main movie, deselect what you don't need, and everything fits on a blank disc."))
                             .size(15.0)
                             .color(p.muted),
                     );
@@ -214,32 +215,32 @@ impl App {
                     ui.spacing_mut().item_spacing.x = gap;
                     let has_drive = drives.iter().find(|d| d.2).cloned();
                     let drive_text = match (&has_drive, drives.is_empty()) {
-                        (Some(d), _) => format!("Video-DVD in Laufwerk {}", d.0),
-                        (None, true) => "Kein DVD-Laufwerk gefunden".to_string(),
-                        (None, false) => "Keine Video-DVD eingelegt".to_string(),
+                        (Some(d), _) => trf!("Video-DVD in Laufwerk {}", "Video DVD in drive {}", d.0),
+                        (None, true) => tr!("Kein DVD-Laufwerk gefunden", "No DVD drive found").to_string(),
+                        (None, false) => tr!("Keine Video-DVD eingelegt", "No video DVD inserted").to_string(),
                     };
-                    if start_card(ui, &p, w, ic::DISC, "Laufwerk", &drive_text, has_drive.is_some()) {
+                    if start_card(ui, &p, w, ic::DISC, tr!("Laufwerk", "Drive"), &drive_text, has_drive.is_some()) {
                         if let Some(d) = has_drive {
                             self.open_path(ctx, d.1);
                         }
                     }
-                    if start_card(ui, &p, w, ic::FOLDER_OPEN, "Ordner", "VIDEO_TS-Ordner auf der Festplatte", true) {
+                    if start_card(ui, &p, w, ic::FOLDER_OPEN, tr!("Ordner", "Folder"), tr!("VIDEO_TS-Ordner auf der Festplatte", "VIDEO_TS folder on the hard disk"), true) {
                         self.pick_folder(ctx);
                     }
-                    if start_card(ui, &p, w, ic::FILE_ARROW_DOWN, "ISO-Abbild", "Abbilddatei einer DVD", true) {
+                    if start_card(ui, &p, w, ic::FILE_ARROW_DOWN, tr!("ISO-Abbild", "ISO image"), tr!("Abbilddatei einer DVD", "Image file of a DVD"), true) {
                         self.pick_iso(ctx);
                     }
                 });
 
                 ui.add_space(18.0);
                 ui.vertical_centered(|ui| {
-                    ui.label(RichText::new("Oder ziehe einen Ordner, eine ISO-Datei oder ein Projekt einfach hierher.").color(p.muted));
+                    ui.label(RichText::new(tr!("Oder ziehe einen Ordner, eine ISO-Datei oder ein Projekt einfach hierher.", "Or simply drag a folder, an ISO file or a project here.")).color(p.muted));
                     ui.add_space(10.0);
                     // Drei Knöpfe nebeneinander, mittig
                     let labels = [
-                        format!("{}  Projekt öffnen", ic::FLOPPY_DISK),
-                        format!("{}  Mehrere DVDs nacheinander", ic::QUEUE),
-                        format!("{}  Beispiel-DVD ausprobieren", ic::SPARKLE),
+                        trf!("{}  Projekt öffnen", "{}  Open project", ic::FLOPPY_DISK),
+                        trf!("{}  Mehrere DVDs nacheinander", "{}  Several DVDs in a row", ic::QUEUE),
+                        trf!("{}  Beispiel-DVD ausprobieren", "{}  Try a sample DVD", ic::SPARKLE),
                     ];
                     let font = egui::FontId::proportional(14.0);
                     let widths: f32 = labels
@@ -250,10 +251,10 @@ impl App {
                     ui.horizontal(|ui| {
                         ui.add_space(((ui.available_width() - row_w) / 2.0).max(0.0));
                         ui.spacing_mut().item_spacing.x = 8.0;
-                        if soft_button(ui, &p, &labels[0]).on_hover_text("Eine gespeicherte Projektdatei (.dvdproj) laden").clicked() {
+                        if soft_button(ui, &p, &labels[0]).on_hover_text(tr!("Eine gespeicherte Projektdatei (.dvdproj) laden", "Load a saved project file (.dvdproj)")).clicked() {
                             self.pick_project(ctx);
                         }
-                        if soft_button(ui, &p, &labels[1]).on_hover_text("Warteschlange: mehrere DVDs, ISO-Dateien oder Projekte nacheinander sichern").clicked() {
+                        if soft_button(ui, &p, &labels[1]).on_hover_text(tr!("Warteschlange: mehrere DVDs, ISO-Dateien oder Projekte nacheinander sichern", "Queue: back up several DVDs, ISO files or projects one after another")).clicked() {
                             self.queue_open = true;
                         }
                         if soft_button(ui, &p, &labels[2]).clicked() {
@@ -262,8 +263,8 @@ impl App {
                     });
                     ui.add_space(14.0);
                     ui.label(
-                        RichText::new(format!(
-                            "{}  Kopiergeschützte Kauf-DVDs werden erkannt und nicht verarbeitet.",
+                        RichText::new(trf!(
+                            "{}  Kopiergeschützte Kauf-DVDs werden erkannt und nicht verarbeitet.", "{}  Copy-protected commercial DVDs are detected and not processed.",
                             ic::INFO
                         ))
                         .size(12.5)
@@ -354,7 +355,7 @@ impl App {
                     &title,
                     &sub,
                     &fmt_size(out),
-                    &format!("von {}", fmt_size(stats.total)),
+                    &trf!("von {}", "of {}", fmt_size(stats.total)),
                 );
                 if r.clicked() && !selected {
                     this.sel = Selection::Item(id);
@@ -364,8 +365,8 @@ impl App {
                     let chapters = disc.titles.get(ti).map(|t| t.chapters.len()).unwrap_or(0);
                     r.context_menu(|ui| {
                         if ui
-                            .add_enabled(chapters > 1, egui::Button::new(format!("{}  In {chapters} Einzeltitel zerlegen", ic::LIST_BULLETS)))
-                            .on_hover_text("Legt für jedes Kapitel einen eigenen Eintrag in der neuen DVD an")
+                            .add_enabled(chapters > 1, egui::Button::new(trf!("{}  In {chapters} Einzeltitel zerlegen", "{}  Split into {chapters} separate titles", ic::LIST_BULLETS)))
+                            .on_hover_text(tr!("Legt für jedes Kapitel einen eigenen Eintrag in der neuen DVD an", "Creates a separate entry in the new DVD for each chapter"))
                             .clicked()
                         {
                             let at = this.plan.reauthor.len();
@@ -377,38 +378,38 @@ impl App {
                 }
             };
 
-            group_label(ui, &p, "Hauptfilm");
+            group_label(ui, &p, tr!("Hauptfilm", "Main movie"));
             for (i, cat) in &titles {
                 if *cat == Category::MainMovie {
                     let t = &disc.titles[*i];
-                    let sub = format!("{} · {} Kapitel", fmt_time(t.ms), t.chapters.len());
-                    row(self, ui, ItemId::Title(*i), ic::FILM_STRIP, p.accent, format!("Titel {}", t.number), sub);
+                    let sub = format!("{} · {}", fmt_time(t.ms), discslim::i18n::chapters(t.chapters.len()));
+                    row(self, ui, ItemId::Title(*i), ic::FILM_STRIP, p.accent, trf!("Titel {}", "Title {}", t.number), sub);
                 }
             }
             if titles.iter().any(|t| t.1 == Category::Extra) {
-                group_label(ui, &p, "Extras");
+                group_label(ui, &p, tr!("Extras", "Extras"));
                 for (i, cat) in &titles {
                     if *cat == Category::Extra {
                         let t = &disc.titles[*i];
-                        let sub = format!("{} · {} Kapitel", fmt_time(t.ms), t.chapters.len());
-                        row(self, ui, ItemId::Title(*i), ic::STACK, p.audio, format!("Titel {}", t.number), sub);
+                        let sub = format!("{} · {}", fmt_time(t.ms), discslim::i18n::chapters(t.chapters.len()));
+                        row(self, ui, ItemId::Title(*i), ic::STACK, p.audio, trf!("Titel {}", "Title {}", t.number), sub);
                     }
                 }
             }
             if !disc.menus.is_empty() {
-                group_label(ui, &p, "Menüs");
+                group_label(ui, &p, tr!("Menüs", "Menus"));
                 for m in &disc.menus {
-                    let name = if m.vts == 0 { "Hauptmenü".to_string() } else { format!("Menü von Titelset {}", m.vts) };
-                    let pages = if m.pgc_count == 1 { "1 Seite".to_string() } else { format!("{} Seiten", m.pgc_count) };
+                    let name = if m.vts == 0 { tr!("Hauptmenü", "Main menu").to_string() } else { trf!("Menü von Titelset {}", "Menu of title set {}", m.vts) };
+                    let pages = if m.pgc_count == 1 { tr!("1 Seite", "1 page").to_string() } else { trf!("{} Seiten", "{} pages", m.pgc_count) };
                     let sub = if m.ms > 0 { format!("{} · {pages}", fmt_time(m.ms)) } else { pages };
                     row(self, ui, ItemId::Menu(m.vts), ic::LIST_BULLETS, p.subs, name, sub);
                 }
             }
             if !disc.unused.is_empty() {
-                group_label(ui, &p, "Ungenutzt");
+                group_label(ui, &p, tr!("Ungenutzt", "Unused"));
                 for u in &disc.unused {
-                    let sub = format!("{} Abschnitte ohne Verweis", u.cells.len());
-                    row(self, ui, ItemId::Unused(u.vts), ic::TRASH, p.other, format!("Titelset {}", u.vts), sub);
+                    let sub = discslim::i18n::count(u.cells.len(), "Abschnitt ohne Verweis", "Abschnitte ohne Verweis", "unreferenced section", "unreferenced sections");
+                    row(self, ui, ItemId::Unused(u.vts), ic::TRASH, p.other, trf!("Titelset {}", "Title set {}", u.vts), sub);
                 }
             }
         });
@@ -419,11 +420,11 @@ impl App {
         let full_h = ui.available_height();
         let new_h = (full_h * 0.55).max(120.0);
         ui.horizontal(|ui| {
-            group_label(ui, &p, "Neue DVD");
+            group_label(ui, &p, tr!("Neue DVD", "New DVD"));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let ok = !self.plan.reauthor.is_empty();
-                let b = egui::Button::new(RichText::new(format!("{}  Alle Schnitte abspielen", ic::PLAY)).size(12.5));
-                if ui.add_enabled(ok, b).on_hover_text("Spielt alle Einträge nacheinander so ab, wie sie ausgegeben werden").clicked() {
+                let b = egui::Button::new(RichText::new(trf!("{}  Alle Schnitte abspielen", "{}  Play all cuts", ic::PLAY)).size(12.5));
+                if ui.add_enabled(ok, b).on_hover_text(tr!("Spielt alle Einträge nacheinander so ab, wie sie ausgegeben werden", "Plays all entries one after another as they will be written")).clicked() {
                     self.update_program();
                     self.preview.program = true;
                     self.preview.prog_cur = 0;
@@ -442,7 +443,7 @@ impl App {
                 ui.add_space(16.0);
                 ui.vertical_centered(|ui| {
                     ui.label(RichText::new(ic::LIST_PLUS).size(30.0).color(p.faint));
-                    ui.label(RichText::new("Füge unten Titel hinzu. Die Reihenfolge hier ist die Reihenfolge auf der neuen DVD.").size(13.0).color(p.muted));
+                    ui.label(RichText::new(tr!("Füge unten Titel hinzu. Die Reihenfolge hier ist die Reihenfolge auf der neuen DVD.", "Add titles below. The order here is the order on the new DVD.")).size(13.0).color(p.muted));
                 });
             }
             let n = self.plan.reauthor.len();
@@ -450,11 +451,11 @@ impl App {
                 let e = self.plan.reauthor[i].clone();
                 let Some(t) = disc.titles.get(e.title) else { continue };
                 let chapters = if e.first_chapter == 0 && e.last_chapter + 1 >= t.chapters.len() {
-                    if t.chapters.len() == 1 { "1 Kapitel".to_string() } else { format!("Alle {} Kapitel", t.chapters.len()) }
+                    if t.chapters.len() == 1 { tr!("1 Kapitel", "1 chapter").to_string() } else { trf!("Alle {} Kapitel", "All {} chapters", t.chapters.len()) }
                 } else if e.first_chapter == e.last_chapter {
-                    format!("Kapitel {}", e.first_chapter + 1)
+                    trf!("Kapitel {}", "Chapter {}", e.first_chapter + 1)
                 } else {
-                    format!("Kapitel {} bis {}", e.first_chapter + 1, e.last_chapter + 1)
+                    trf!("Kapitel {} bis {}", "Chapters {} to {}", e.first_chapter + 1, e.last_chapter + 1)
                 };
                 let mut size = 0.0;
                 for k in reauthor_cells(disc, &e) {
@@ -466,13 +467,13 @@ impl App {
                 let chapters = if e.cut.is_trim(total_ms) {
                     let total = total_ms;
                     let len = e.cut.end().min(total).saturating_sub(e.cut.start());
-                    format!("{} {} geschnitten", fmt_time(len), ic::SCISSORS)
+                    trf!("{} {} geschnitten", "{} {} cut", fmt_time(len), ic::SCISSORS)
                 } else {
                     chapters
                 };
                 // Eigene Kapitelmarken: Anzahl der neuen Kapitel anhängen
                 let chapters = if e.chapter_marks.is_some() {
-                    format!("{chapters} · {} {} Kap.", ic::BOOKMARK_SIMPLE, e.chapter_count(disc))
+                    trf!("{chapters} · {} {} Kap.", "{chapters} · {} {} ch.", ic::BOOKMARK_SIMPLE, e.chapter_count(disc))
                 } else {
                     chapters
                 };
@@ -484,7 +485,7 @@ impl App {
                     i,
                     &e,
                     selected || playing_here,
-                    &format!("{}. Titel {}", i + 1, t.number),
+                    &trf!("{}. Titel {}", "{}. Title {}", i + 1, t.number),
                     &chapters,
                     &fmt_size(size),
                     mode_label(e.settings.video),
@@ -500,28 +501,28 @@ impl App {
                     }
                 }
                 r.context_menu(|ui| {
-                    if ui.button(format!("{}  Nach oben", ic::ARROW_UP)).clicked() {
+                    if ui.button(trf!("{}  Nach oben", "{}  Move up", ic::ARROW_UP)).clicked() {
                         swap = Some((i, i.wrapping_sub(1)));
                         ui.close();
                     }
-                    if ui.button(format!("{}  Nach unten", ic::ARROW_DOWN)).clicked() {
+                    if ui.button(trf!("{}  Nach unten", "{}  Move down", ic::ARROW_DOWN)).clicked() {
                         swap = Some((i, i + 1));
                         ui.close();
                     }
-                    if ui.button(format!("{}  Kopieren (mit Schnitt)", ic::COPY)).clicked() {
+                    if ui.button(trf!("{}  Kopieren (mit Schnitt)", "{}  Duplicate (with cut)", ic::COPY)).clicked() {
                         dup = Some(i);
                         ui.close();
                     }
                     let n = e.last_chapter + 1 - e.first_chapter.min(e.last_chapter);
                     if ui
-                        .add_enabled(n > 1, egui::Button::new(format!("{}  In {n} Einzeltitel zerlegen", ic::LIST_BULLETS)))
-                        .on_hover_text("Ersetzt diesen Eintrag durch je einen Eintrag pro Kapitel")
+                        .add_enabled(n > 1, egui::Button::new(trf!("{}  In {n} Einzeltitel zerlegen", "{}  Split into {n} separate titles", ic::LIST_BULLETS)))
+                        .on_hover_text(tr!("Ersetzt diesen Eintrag durch je einen Eintrag pro Kapitel", "Replaces this entry with one entry per chapter"))
                         .clicked()
                     {
                         split = Some(i);
                         ui.close();
                     }
-                    if ui.button(format!("{}  Entfernen", ic::TRASH)).clicked() {
+                    if ui.button(trf!("{}  Entfernen", "{}  Remove", ic::TRASH)).clicked() {
                         remove = Some(i);
                         ui.close();
                     }
@@ -530,16 +531,16 @@ impl App {
         });
         if let Selection::Entry(i) = self.sel {
             ui.horizontal(|ui| {
-                if style::icon_button(ui, &p, ic::ARROW_UP, "Nach oben").clicked() && i > 0 {
+                if style::icon_button(ui, &p, ic::ARROW_UP, tr!("Nach oben", "Move up")).clicked() && i > 0 {
                     swap = Some((i, i - 1));
                 }
-                if style::icon_button(ui, &p, ic::ARROW_DOWN, "Nach unten").clicked() {
+                if style::icon_button(ui, &p, ic::ARROW_DOWN, tr!("Nach unten", "Move down")).clicked() {
                     swap = Some((i, i + 1));
                 }
-                if style::icon_button(ui, &p, ic::COPY, "Eintrag kopieren, samt Schnitt und Einstellungen").clicked() {
+                if style::icon_button(ui, &p, ic::COPY, tr!("Eintrag kopieren, samt Schnitt und Einstellungen", "Duplicate entry, including cut and settings")).clicked() {
                     dup = Some(i);
                 }
-                if style::icon_button(ui, &p, ic::TRASH, "Entfernen").clicked() {
+                if style::icon_button(ui, &p, ic::TRASH, tr!("Entfernen", "Remove")).clicked() {
                     remove = Some(i);
                 }
             });
@@ -575,11 +576,11 @@ impl App {
         }
 
         ui.separator();
-        group_label(ui, &p, "Titel dieser DVD");
+        group_label(ui, &p, tr!("Titel dieser DVD", "Titles on this DVD"));
         ScrollArea::vertical().id_salt("quelle").auto_shrink([false, false]).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
             for (idx, t) in disc.titles.iter().enumerate() {
-                let sub = format!("{} · {} Kapitel", fmt_time(t.ms), t.chapters.len());
+                let sub = format!("{} · {}", fmt_time(t.ms), discslim::i18n::chapters(t.chapters.len()));
                 let stats = disc.title_stats(t);
                 let mut add = false;
                 let mut split_src: Option<usize> = None;
@@ -590,7 +591,7 @@ impl App {
                         .stroke(Stroke::NONE)
                         .corner_radius(CornerRadius::same(8))
                         .min_size(Vec2::new(34.0, 34.0));
-                    if ui.add(b).on_hover_text("Zur neuen DVD hinzufügen").clicked() {
+                    if ui.add(b).on_hover_text(tr!("Zur neuen DVD hinzufügen", "Add to the new DVD")).clicked() {
                         add = true;
                     }
                     let selected = self.sel == Selection::Source(idx);
@@ -601,10 +602,10 @@ impl App {
                         selected,
                         ic::FILM_STRIP,
                         p.muted,
-                        &format!("Titel {}", t.number),
+                        &trf!("Titel {}", "Title {}", t.number),
                         &sub,
                         &fmt_size(stats.total),
-                        "ansehen",
+                        tr!("ansehen", "view"),
                     );
                     if r.clicked() && !selected {
                         self.sel = Selection::Source(idx);
@@ -612,13 +613,13 @@ impl App {
                     }
                     let chapters = t.chapters.len();
                     r.context_menu(|ui| {
-                        if ui.button(format!("{}  Zur neuen DVD hinzufügen", ic::PLUS)).clicked() {
+                        if ui.button(trf!("{}  Zur neuen DVD hinzufügen", "{}  Add to the new DVD", ic::PLUS)).clicked() {
                             add = true;
                             ui.close();
                         }
                         if ui
-                            .add_enabled(chapters > 1, egui::Button::new(format!("{}  In {chapters} Einzeltitel zerlegen", ic::LIST_BULLETS)))
-                            .on_hover_text("Fügt jedes Kapitel als eigenen Eintrag hinzu")
+                            .add_enabled(chapters > 1, egui::Button::new(trf!("{}  In {chapters} Einzeltitel zerlegen", "{}  Split into {chapters} separate titles", ic::LIST_BULLETS)))
+                            .on_hover_text(tr!("Fügt jedes Kapitel als eigenen Eintrag hinzu", "Adds each chapter as a separate entry"))
                             .clicked()
                         {
                             split_src = Some(idx);
@@ -761,12 +762,12 @@ impl App {
                 let (title_idx, text) = match id {
                     ItemId::Title(i) => {
                         let t = &disc.titles[i];
-                        let name = if t.category == Category::MainMovie { "Hauptfilm" } else { "Extra" };
-                        (Some(i), format!("{name} · Titel {}", t.number))
+                        let name = if t.category == Category::MainMovie { tr!("Hauptfilm", "Main movie") } else { tr!("Extra", "Extra") };
+                        (Some(i), trf!("{name} · Titel {}", "{name} · Title {}", t.number))
                     }
-                    ItemId::Menu(0) => (None, "Hauptmenü".to_string()),
-                    ItemId::Menu(v) => (None, format!("Menü von Titelset {v}")),
-                    ItemId::Unused(v) => (None, format!("Ungenutzt in Titelset {v}")),
+                    ItemId::Menu(0) => (None, tr!("Hauptmenü", "Main menu").to_string()),
+                    ItemId::Menu(v) => (None, trf!("Menü von Titelset {v}", "Menu of title set {v}")),
+                    ItemId::Unused(v) => (None, trf!("Ungenutzt in Titelset {v}", "Unused in title set {v}")),
                 };
                 (self.plan.settings(id), stats, title_idx, text)
             }
@@ -778,23 +779,23 @@ impl App {
                 }
                 stats.scale(entry_kept_fraction(disc, e));
                 let t = &disc.titles[e.title];
-                (e.settings.clone(), stats, Some(e.title), format!("Eintrag {} · Titel {}", i + 1, t.number))
+                (e.settings.clone(), stats, Some(e.title), trf!("Eintrag {} · Titel {}", "Entry {} · Title {}", i + 1, t.number))
             }
             Selection::Source(idx) => {
                 let Some(t) = disc.titles.get(idx) else { return };
-                ui.label(RichText::new(format!("Titel {}", t.number)).family(semibold()).size(15.0));
+                ui.label(RichText::new(trf!("Titel {}", "Title {}", t.number)).family(semibold()).size(15.0));
                 ui.label(
-                    RichText::new(format!("{} · {} Kapitel · {}", fmt_time(t.ms), t.chapters.len(), fmt_size(disc.title_stats(t).total)))
+                    RichText::new(format!("{} · {} · {}", fmt_time(t.ms), discslim::i18n::chapters(t.chapters.len()), fmt_size(disc.title_stats(t).total)))
                         .color(p.muted),
                 );
                 ui.add_space(8.0);
                 ui.label(
-                    RichText::new("Die Vorschau zeigt diesen Titel. In die neue DVD kommt er erst über den Plus-Knopf.")
+                    RichText::new(tr!("Die Vorschau zeigt diesen Titel. In die neue DVD kommt er erst über den Plus-Knopf.", "The preview shows this title. It only goes into the new DVD via the plus button."))
                         .size(13.0)
                         .color(p.muted),
                 );
                 ui.add_space(8.0);
-                if primary_button(ui, &p, &format!("{}  Zur neuen DVD hinzufügen", ic::PLUS), true).clicked() {
+                if primary_button(ui, &p, &trf!("{}  Zur neuen DVD hinzufügen", "{}  Add to the new DVD", ic::PLUS), true).clicked() {
                     self.add_entry(disc, idx);
                 }
                 return;
@@ -803,7 +804,7 @@ impl App {
                 ui.add_space(30.0);
                 ui.vertical_centered(|ui| {
                     ui.label(RichText::new(ic::SLIDERS_HORIZONTAL).size(34.0).color(p.faint));
-                    ui.label(RichText::new("Wähle links etwas aus, um die Einstellungen zu sehen.").color(p.muted));
+                    ui.label(RichText::new(tr!("Wähle links etwas aus, um die Einstellungen zu sehen.", "Select something on the left to see its settings.")).color(p.muted));
                 });
                 return;
             }
@@ -818,18 +819,18 @@ impl App {
             if let Selection::Entry(i) = sel {
                 let t = &disc.titles[self.plan.reauthor[i].title];
                 let count = t.chapters.len();
-                section(ui, &p, ic::LIST_BULLETS, "Kapitel");
+                section(ui, &p, ic::LIST_BULLETS, tr!("Kapitel", "Chapters"));
                 let mut changed = false;
                 ui.horizontal(|ui| {
                     let e = &mut self.plan.reauthor[i];
-                    ui.label("Von");
+                    ui.label(tr!("Von", "From"));
                     egui::ComboBox::from_id_salt("von").width(70.0).selected_text((e.first_chapter + 1).to_string()).show_ui(ui, |ui| {
                         for c in 0..count {
                             changed |= ui.selectable_value(&mut e.first_chapter, c, (c + 1).to_string()).changed();
                         }
                     });
-                    ui.label("bis");
-                    egui::ComboBox::from_id_salt("bis").width(70.0).selected_text((e.last_chapter + 1).to_string()).show_ui(ui, |ui| {
+                    ui.label(tr!("bis", "to"));
+                    egui::ComboBox::from_id_salt(tr!("bis", "to")).width(70.0).selected_text((e.last_chapter + 1).to_string()).show_ui(ui, |ui| {
                         for c in 0..count {
                             changed |= ui.selectable_value(&mut e.last_chapter, c, (c + 1).to_string()).changed();
                         }
@@ -854,21 +855,21 @@ impl App {
                 self.view_chapter_marks(ui, disc, i);
                 // 1:1: Bild unverändert übernehmen, nur an bildgenauen Schnittstellen wird neu kodiert
                 let mut one_to_one = matches!(settings.video, VideoMode::Keep);
-                if style::check(ui, &p, &mut one_to_one, "1:1 übernehmen (Bild nicht verkleinern)") {
+                if style::check(ui, &p, &mut one_to_one, tr!("1:1 übernehmen (Bild nicht verkleinern)", "Copy 1:1 (do not shrink video)")) {
                     settings.video = if one_to_one { VideoMode::Keep } else { VideoMode::Auto };
                 }
                 ui.add_space(4.0);
             }
 
             // Video
-            section(ui, &p, ic::FILM_STRIP, "BILD");
+            section(ui, &p, ic::FILM_STRIP, tr!("BILD", "VIDEO"));
             let mut kind = match settings.video {
                 VideoMode::Keep => 0,
                 VideoMode::Auto => 1,
                 VideoMode::Custom(_) => 2,
                 VideoMode::Still => 3,
             };
-            let opts = [(0, "Original"), (1, "Auto"), (2, "Eigen"), (3, "Standbild")];
+            let opts = [(0, tr!("Original", "Original")), (1, tr!("Auto", "Auto")), (2, tr!("Eigen", "Custom")), (3, tr!("Standbild", "Still image"))];
             if segmented(ui, &p, &mut kind, &opts, width) {
                 settings.video = match kind {
                     0 => VideoMode::Keep,
@@ -878,10 +879,10 @@ impl App {
                 };
             }
             let (ratio, desc) = match settings.video {
-                VideoMode::Keep => (1.0, "Das Bild bleibt genau wie auf der DVD.".to_string()),
-                VideoMode::Auto => (est.auto_ratio, "Wird so weit verkleinert, dass alles auf den Rohling passt.".to_string()),
-                VideoMode::Custom(r) => (r, "Du legst den Anteil selbst fest.".to_string()),
-                VideoMode::Still => (0.12, "Nur ein Standbild je Abschnitt, Zeitablauf und Ton bleiben.".to_string()),
+                VideoMode::Keep => (1.0, tr!("Das Bild bleibt genau wie auf der DVD.", "The video stays exactly as on the DVD.").to_string()),
+                VideoMode::Auto => (est.auto_ratio, tr!("Wird so weit verkleinert, dass alles auf den Rohling passt.", "Shrunk just enough for everything to fit on the blank disc.").to_string()),
+                VideoMode::Custom(r) => (r, tr!("Du legst den Anteil selbst fest.", "You set the share yourself.").to_string()),
+                VideoMode::Still => (0.12, tr!("Nur ein Standbild je Abschnitt, Zeitablauf und Ton bleiben.", "Only one still image per section; timing and audio are kept.").to_string()),
             };
             ui.label(RichText::new(desc).size(12.5).color(p.muted));
             if let VideoMode::Custom(r) = &mut settings.video {
@@ -896,11 +897,11 @@ impl App {
                 let (word, level) = quality_word(ratio);
                 let color = [p.good, p.warn, p.bad][level];
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(format!("{} bleiben", percent(f64::from(ratio)))).family(semibold()).size(14.0));
+                    ui.label(RichText::new(trf!("{} bleiben", "{} kept", percent(f64::from(ratio)))).family(semibold()).size(14.0));
                     ui.label(RichText::new(word).size(13.0).color(color));
                 });
                 if !matches!(settings.video, VideoMode::Keep) { ui.horizontal(|ui| {
-                    ui.label(RichText::new("Glättung").color(p.muted)).on_hover_text("Entfernt feinste Bilddetails, das spart Platz und vermeidet Blockbildung.");
+                    ui.label(RichText::new(tr!("Glättung", "Smoothing")).color(p.muted)).on_hover_text(tr!("Entfernt feinste Bilddetails, das spart Platz und vermeidet Blockbildung.", "Removes the finest picture details; this saves space and avoids blockiness."));
                     egui::ComboBox::from_id_salt("glaettung").width(120.0).selected_text(settings.smoothing.label()).show_ui(ui, |ui| {
                         for sm in [Smoothing::Off, Smoothing::Low, Smoothing::Medium, Smoothing::High] {
                             ui.selectable_value(&mut settings.smoothing, sm, sm.label());
@@ -915,15 +916,15 @@ impl App {
                 VideoMode::Custom(r) => stats.video * f64::from(r),
                 VideoMode::Still => stats.video * 0.12,
             };
-            ui.label(RichText::new(format!("Bilddaten: {} → {}", fmt_size(stats.video), fmt_size(out_v))).size(12.5).color(p.muted));
+            ui.label(RichText::new(trf!("Bilddaten: {} → {}", "Video data: {} → {}", fmt_size(stats.video), fmt_size(out_v))).size(12.5).color(p.muted));
 
             // Spuren
             if let Some(ti) = tracks_title {
                 let t = &disc.titles[ti];
                 ui.add_space(6.0);
-                section(ui, &p, ic::SPEAKER_HIGH, "TON");
+                section(ui, &p, ic::SPEAKER_HIGH, tr!("TON", "AUDIO"));
                 if t.audio.is_empty() {
-                    ui.label(RichText::new("Keine Tonspuren").size(13.0).color(p.muted));
+                    ui.label(RichText::new(tr!("Keine Tonspuren", "No audio tracks")).size(13.0).color(p.muted));
                 }
                 for a in &t.audio {
                     let on = &mut settings.audio[a.phys as usize];
@@ -937,9 +938,9 @@ impl App {
                     track_row(ui, &p, on, &text, &fmt_size(stats.audio[a.phys as usize]));
                 }
                 ui.add_space(6.0);
-                section(ui, &p, ic::SUBTITLES, "UNTERTITEL");
+                section(ui, &p, ic::SUBTITLES, tr!("UNTERTITEL", "SUBTITLES"));
                 if t.subs.is_empty() {
-                    ui.label(RichText::new("Keine Untertitel").size(13.0).color(p.muted));
+                    ui.label(RichText::new(tr!("Keine Untertitel", "No subtitles")).size(13.0).color(p.muted));
                 }
                 for a in &t.subs {
                     let idx = a.phys.first().copied().unwrap_or(0) as usize;
@@ -960,10 +961,10 @@ impl App {
                 ui.add_space(6.0);
                 let a_sum = stat_sum_audio(&stats, &settings.audio);
                 let s_sum = stat_sum_subs(&stats, &settings.subs);
-                ui.label(RichText::new(format!("Ton und Untertitel: {}", fmt_size(a_sum + s_sum))).size(12.5).color(p.muted));
+                ui.label(RichText::new(trf!("Ton und Untertitel: {}", "Audio and subtitles: {}", fmt_size(a_sum + s_sum))).size(12.5).color(p.muted));
             } else {
                 ui.add_space(6.0);
-                ui.label(RichText::new(format!("{}  Menüs behalten immer alle Ton- und Untertitelspuren.", ic::INFO)).size(12.5).color(p.faint));
+                ui.label(RichText::new(trf!("{}  Menüs behalten immer alle Ton- und Untertitelspuren.", "{}  Menus always keep all audio and subtitle tracks.", ic::INFO)).size(12.5).color(p.faint));
             }
         });
 
@@ -986,12 +987,12 @@ impl App {
         let p = self.pal;
         let now = self.preview.current_ms();
         let total = entry_duration_ms(disc, &self.plan.reauthor[i]);
-        section(ui, &p, ic::SCISSORS, "SCHNITT");
+        section(ui, &p, ic::SCISSORS, tr!("SCHNITT", "CUT"));
         let cut = &mut self.plan.reauthor[i].cut;
         let mut changed = false;
         let mut seek: Option<u64> = None;
         for (label, value, empty, fallback) in
-            [("Anfang", &mut cut.start_ms, "Titelanfang", 0), ("Ende", &mut cut.end_ms, "Titelende", total.saturating_sub(40))]
+            [(tr!("Anfang", "Start"), &mut cut.start_ms, tr!("Titelanfang", "Title start"), 0), (tr!("Ende", "End"), &mut cut.end_ms, tr!("Titelende", "Title end"), total.saturating_sub(40))]
         {
             ui.horizontal(|ui| {
                 ui.add_sized([52.0, 24.0], egui::Label::new(RichText::new(label).color(p.muted)));
@@ -1003,17 +1004,17 @@ impl App {
                     .stroke(Stroke::NONE)
                     .corner_radius(CornerRadius::same(6))
                     .min_size(Vec2::new(28.0, 28.0));
-                if ui.add(jump).on_hover_text("In der Vorschau zu dieser Schnittmarke springen").clicked() {
+                if ui.add(jump).on_hover_text(tr!("In der Vorschau zu dieser Schnittmarke springen", "Jump to this cut marker in the preview")).clicked() {
                     seek = Some(value.unwrap_or(fallback));
                 }
                 let b = ui
                     .add_enabled(now.is_some(), egui::Button::new(RichText::new(ic::MAP_PIN).size(15.0)).min_size(Vec2::new(30.0, 26.0)))
-                    .on_hover_text("Setzt die Marke auf das Bild, das die Vorschau gerade zeigt");
+                    .on_hover_text(tr!("Setzt die Marke auf das Bild, das die Vorschau gerade zeigt", "Sets the marker to the frame the preview is showing"));
                 if b.clicked() {
                     *value = now;
                     changed = true;
                 }
-                if value.is_some() && style::icon_button(ui, &p, ic::X, "Marke entfernen").clicked() {
+                if value.is_some() && style::icon_button(ui, &p, ic::X, tr!("Marke entfernen", "Remove marker")).clicked() {
                     *value = None;
                     changed = true;
                 }
@@ -1030,18 +1031,18 @@ impl App {
                 changed = true;
             }
         }
-        if style::check(ui, &p, &mut cut.exact, "Bildgenau schneiden") {
+        if style::check(ui, &p, &mut cut.exact, tr!("Bildgenau schneiden", "Frame-accurate cut")) {
             self.prefs.cut_exact = cut.exact;
         }
         let hint = if cut.exact {
-            "Nur die Bildgruppen an den Schnittstellen werden neu kodiert, der Rest bleibt unverändert."
+            tr!("Nur die Bildgruppen an den Schnittstellen werden neu kodiert, der Rest bleibt unverändert.", "Only the frame groups at the cut points are re-encoded; the rest stays unchanged.")
         } else {
-            "Geschnitten wird am nächsten Schlüsselbild, also auf etwa eine halbe Sekunde genau, ganz ohne Neukodierung."
+            tr!("Geschnitten wird am nächsten Schlüsselbild, also auf etwa eine halbe Sekunde genau, ganz ohne Neukodierung.", "Cuts are made at the nearest keyframe, accurate to about half a second, without any re-encoding.")
         };
         ui.label(RichText::new(hint).size(12.5).color(p.muted));
         if cut.is_trim(total) {
             let len = cut.end().min(total).saturating_sub(cut.start());
-            ui.label(RichText::new(format!("Länge nach dem Schnitt: {}", fmt_time(len))).size(13.0));
+            ui.label(RichText::new(trf!("Länge nach dem Schnitt: {}", "Length after cut: {}", fmt_time(len))).size(13.0));
         }
         let _ = changed;
         ui.add_space(4.0);
@@ -1055,24 +1056,24 @@ impl App {
         let total = entry_duration_ms(disc, e);
         let (cut_a, cut_b) = e.cut.effective(total);
         let cut_b = cut_b.min(total);
-        section(ui, &p, ic::BOOKMARK_SIMPLE, "KAPITELMARKEN");
+        section(ui, &p, ic::BOOKMARK_SIMPLE, tr!("KAPITELMARKEN", "CHAPTER MARKERS"));
 
         let Some(marks) = e.chapter_marks.clone() else {
             let n = e.last_chapter + 1 - e.first_chapter.min(e.last_chapter);
-            let text = if n == 1 { "Die DVD hat hier 1 Kapitel.".to_string() } else { format!("Die {n} Kapitel der DVD werden übernommen.") };
+            let text = if n == 1 { tr!("Die DVD hat hier 1 Kapitel.", "The DVD has 1 chapter here.").to_string() } else { trf!("Die {n} Kapitel der DVD werden übernommen.", "The DVD's {n} chapters are kept.") };
             ui.label(RichText::new(text).size(13.0).color(p.muted));
             ui.horizontal(|ui| {
                 if ui
-                    .button(RichText::new(format!("{}  Kapitel bearbeiten", ic::PENCIL_SIMPLE)).size(13.0))
-                    .on_hover_text("Übernimmt die Kapitel der DVD als Marken, die du dann ändern kannst")
+                    .button(RichText::new(trf!("{}  Kapitel bearbeiten", "{}  Edit chapters", ic::PENCIL_SIMPLE)).size(13.0))
+                    .on_hover_text(tr!("Übernimmt die Kapitel der DVD als Marken, die du dann ändern kannst", "Takes over the DVD's chapters as markers that you can then change"))
                     .clicked()
                 {
                     let m = self.plan.reauthor[i].original_marks(disc);
                     self.plan.reauthor[i].chapter_marks = Some(m);
                 }
                 if ui
-                    .add_enabled(now.is_some(), egui::Button::new(RichText::new(format!("{}  Neu: Marke hier", ic::MAP_PIN)).size(13.0)))
-                    .on_hover_text("Verwirft die Kapitel der DVD und beginnt mit einer Marke an der Stelle der Vorschau")
+                    .add_enabled(now.is_some(), egui::Button::new(RichText::new(trf!("{}  Neu: Marke hier", "{}  New: marker here", ic::MAP_PIN)).size(13.0)))
+                    .on_hover_text(tr!("Verwirft die Kapitel der DVD und beginnt mit einer Marke an der Stelle der Vorschau", "Discards the DVD's chapters and starts with a marker at the preview position"))
                     .clicked()
                 {
                     let mut m: Vec<u64> = now.into_iter().collect();
@@ -1092,7 +1093,7 @@ impl App {
             ui.add_sized([22.0, 22.0], egui::Label::new(RichText::new(format!("{n}.")).color(p.muted)));
             let r = ui.add_sized([82.0, 22.0], egui::Label::new(RichText::new(fmt_time_precise(at)).family(semibold()).color(color)));
             if outside {
-                r.on_hover_text("Liegt nicht im geschnittenen Bereich und entfällt in der neuen DVD");
+                r.on_hover_text(tr!("Liegt nicht im geschnittenen Bereich und entfällt in der neuen DVD", "Outside the cut range; dropped in the new DVD"));
             }
         };
         // Kleine Symbolknöpfe, damit eine Zeile in die schmale Spalte passt
@@ -1109,7 +1110,7 @@ impl App {
             ui.spacing_mut().item_spacing.y = 0.0;
             ui.horizontal(|ui| {
                 row(ui, 1, cut_a, false);
-                ui.label(RichText::new("Anfang").size(12.5).color(p.muted));
+                ui.label(RichText::new(tr!("Anfang", "Start")).size(12.5).color(p.muted));
             });
             let mut remove = None;
             let mut nudge: Option<(usize, i64)> = None;
@@ -1118,21 +1119,21 @@ impl App {
                 ui.horizontal(|ui| {
                     row(ui, k + 2, *m, outside);
                     ui.spacing_mut().item_spacing.x = 0.0;
-                    if mini(ui, ic::ARROW_LINE_RIGHT, "In der Vorschau zu dieser Marke springen") {
+                    if mini(ui, ic::ARROW_LINE_RIGHT, tr!("In der Vorschau zu dieser Marke springen", "Jump to this marker in the preview")) {
                         seek = Some(*m);
                     }
-                    if mini(ui, ic::CARET_LEFT, "Eine Sekunde früher") {
+                    if mini(ui, ic::CARET_LEFT, tr!("Eine Sekunde früher", "One second earlier")) {
                         nudge = Some((k, -1000));
                     }
-                    if mini(ui, ic::CARET_RIGHT, "Eine Sekunde später") {
+                    if mini(ui, ic::CARET_RIGHT, tr!("Eine Sekunde später", "One second later")) {
                         nudge = Some((k, 1000));
                     }
                     if let Some(t) = now {
-                        if mini(ui, ic::MAP_PIN, "Auf die Stelle der Vorschau setzen") {
+                        if mini(ui, ic::MAP_PIN, tr!("Auf die Stelle der Vorschau setzen", "Set to the preview position")) {
                             nudge = Some((k, t as i64 - *m as i64));
                         }
                     }
-                    if mini(ui, ic::X, "Marke entfernen") {
+                    if mini(ui, ic::X, tr!("Marke entfernen", "Remove marker")) {
                         remove = Some(k);
                     }
                 });
@@ -1150,8 +1151,8 @@ impl App {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             let b = ui
-                .add_enabled(now.is_some(), egui::Button::new(RichText::new(format!("{}  Marke hier", ic::PLUS)).size(13.0)))
-                .on_hover_text("Setzt eine Kapitelmarke an das Bild, das die Vorschau gerade zeigt");
+                .add_enabled(now.is_some(), egui::Button::new(RichText::new(trf!("{}  Marke hier", "{}  Marker here", ic::PLUS)).size(13.0)))
+                .on_hover_text(tr!("Setzt eine Kapitelmarke an das Bild, das die Vorschau gerade zeigt", "Sets a chapter marker at the frame the preview is showing"));
             if b.clicked() {
                 if let Some(t) = now {
                     marks.push(t);
@@ -1159,8 +1160,8 @@ impl App {
                 }
             }
             if ui
-                .button(RichText::new(format!("{}  Original", ic::ARROW_COUNTER_CLOCKWISE)).size(13.0))
-                .on_hover_text("Wieder die Kapitel der DVD verwenden")
+                .button(RichText::new(trf!("{}  Original", "{}  Original", ic::ARROW_COUNTER_CLOCKWISE)).size(13.0))
+                .on_hover_text(tr!("Wieder die Kapitel der DVD verwenden", "Use the DVD's chapters again"))
                 .clicked()
             {
                 self.plan.reauthor[i].chapter_marks = None;
@@ -1170,18 +1171,18 @@ impl App {
             return;
         }
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Alle").color(p.muted));
-            ui.add(egui::DragValue::new(&mut self.prefs.chapter_every_min).range(1..=60).suffix(" Min."));
+            ui.label(RichText::new(tr!("Alle", "Every")).color(p.muted));
+            ui.add(egui::DragValue::new(&mut self.prefs.chapter_every_min).range(1..=60).suffix(tr!(" Min.", " min")));
             if ui
-                .button(RichText::new(format!("{}  verteilen", ic::LIST_NUMBERS)).size(13.0))
-                .on_hover_text("Ersetzt alle Marken durch gleichmäßige Abstände im geschnittenen Bereich")
+                .button(RichText::new(trf!("{}  verteilen", "{}  distribute", ic::LIST_NUMBERS)).size(13.0))
+                .on_hover_text(tr!("Ersetzt alle Marken durch gleichmäßige Abstände im geschnittenen Bereich", "Replaces all markers with even spacing within the cut range"))
                 .clicked()
             {
                 let step = u64::from(self.prefs.chapter_every_min.max(1)) * 60_000;
                 marks = (1..).map(|k| cut_a + k * step).take_while(|m| *m + MIN_CHAPTER_GAP_MS < cut_b).take(98).collect();
                 changed = true;
             }
-            if !marks.is_empty() && ui.button(RichText::new(format!("{}  Alle weg", ic::TRASH)).size(13.0)).clicked() {
+            if !marks.is_empty() && ui.button(RichText::new(trf!("{}  Alle weg", "{}  Remove all", ic::TRASH)).size(13.0)).clicked() {
                 marks.clear();
                 changed = true;
             }
@@ -1193,8 +1194,8 @@ impl App {
         }
         let count = self.plan.reauthor[i].chapter_count(disc);
         ui.label(
-            RichText::new(format!(
-                "Die neue DVD hat hier {count} Kapitel. Sie beginnen am nächsten Schlüsselbild, also auf etwa eine halbe Sekunde genau."
+            RichText::new(trf!(
+                "Die neue DVD hat hier {}. Sie beginnen am nächsten Schlüsselbild, also auf etwa eine halbe Sekunde genau.", "The new DVD has {} here. They start at the nearest keyframe, accurate to about half a second.", discslim::i18n::chapters(count)
             ))
             .size(12.5)
             .color(p.muted),
@@ -1213,16 +1214,16 @@ impl App {
         // Zielgröße rechts
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 16.0;
-            legend(ui, &p, p.video, "Bild", &fmt_size(est.video));
-            legend(ui, &p, p.audio, "Ton", &fmt_size(est.audio));
-            legend(ui, &p, p.subs, "Untertitel", &fmt_size(est.subs));
-            legend(ui, &p, p.other, "Verwaltung", &fmt_size(est.overhead));
+            legend(ui, &p, p.video, tr!("Bild", "Video"), &fmt_size(est.video));
+            legend(ui, &p, p.audio, tr!("Ton", "Audio"), &fmt_size(est.audio));
+            legend(ui, &p, p.subs, tr!("Untertitel", "Subtitles"), &fmt_size(est.subs));
+            legend(ui, &p, p.other, tr!("Verwaltung", "Overhead"), &fmt_size(est.overhead));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let kinds = [
-                    (TargetKind::Dvd5, "DVD 4,7 GB"),
-                    (TargetKind::Dvd9, "DVD 8,5 GB"),
-                    (TargetKind::Custom, "Eigene Größe"),
-                    (TargetKind::Unlimited, "Unbegrenzt"),
+                    (TargetKind::Dvd5, tr!("DVD 4,7 GB", "DVD 4.7 GB")),
+                    (TargetKind::Dvd9, tr!("DVD 8,5 GB", "DVD 8.5 GB")),
+                    (TargetKind::Custom, tr!("Eigene Größe", "Custom size")),
+                    (TargetKind::Unlimited, tr!("Unbegrenzt", "Unlimited")),
                 ];
                 if self.prefs.target_kind == TargetKind::Custom {
                     let dv = egui::DragValue::new(&mut self.prefs.custom_mb).range(10..=20000).suffix(" MB").speed(10);
@@ -1245,7 +1246,7 @@ impl App {
                         TargetKind::Custom | TargetKind::Unlimited => super::target_sectors(&self.prefs),
                     };
                 }
-                ui.label(RichText::new("Ziel").color(p.muted));
+                ui.label(RichText::new(tr!("Ziel", "Target")).color(p.muted));
             });
         });
 
@@ -1278,15 +1279,15 @@ impl App {
         }
         let free = target - est.total;
         let (status, color) = if unlimited {
-            ("ohne Größengrenze".to_string(), p.muted)
+            (tr!("ohne Größengrenze", "no size limit").to_string(), p.muted)
         } else if free >= 0.0 {
-            (format!("{} frei", fmt_size(free)), p.good)
+            (trf!("{} frei", "{} free", fmt_size(free)), p.good)
         } else {
-            (format!("{} zu viel", fmt_size(-free)), p.bad)
+            (trf!("{} zu viel", "{} too much", fmt_size(-free)), p.bad)
         };
         ui.horizontal(|ui| {
             ui.label(
-                RichText::new(if unlimited { fmt_size(est.total) } else { format!("{} von {}", fmt_size(est.total), fmt_size(target)) })
+                RichText::new(if unlimited { fmt_size(est.total) } else { trf!("{} von {}", "{} of {}", fmt_size(est.total), fmt_size(target)) })
                     .family(semibold())
                     .size(14.0),
             );
@@ -1296,22 +1297,22 @@ impl App {
                 let c = [p.good, p.warn, p.bad][level];
                 ui.label(RichText::new(word).size(13.0).color(c));
                 ui.label(
-                    RichText::new(format!("Automatik behält {} des Bildes:", percent(f64::from(est.auto_ratio))))
+                    RichText::new(trf!("Automatik behält {} des Bildes:", "Automatic mode keeps {} of the video:", percent(f64::from(est.auto_ratio))))
                         .size(13.0)
                         .color(p.muted),
                 );
                 let d = self.disc.as_ref();
                 if d.map(|d| !d.analysed_full).unwrap_or(false) {
-                    ui.label(RichText::new("Größen aus Stichprobe ·").size(12.0).color(p.faint))
-                        .on_hover_text("Die Tiefenanalyse oben rechts liefert genaue Werte.");
+                    ui.label(RichText::new(tr!("Größen aus Stichprobe ·", "Sizes from sample ·")).size(12.0).color(p.faint))
+                        .on_hover_text(tr!("Die Tiefenanalyse oben rechts liefert genaue Werte.", "The deep analysis at the top right gives exact values."));
                 }
             });
         });
 
         if !est.fits && !unlimited {
             ui.label(
-                RichText::new(format!(
-                    "{}  Das passt so nicht auf den Rohling. Wähle Tonspuren oder Extras ab.",
+                RichText::new(trf!(
+                    "{}  Das passt so nicht auf den Rohling. Wähle Tonspuren oder Extras ab.", "{}  This doesn't fit on the blank disc. Deselect audio tracks or extras.",
                     ic::WARNING
                 ))
                 .size(13.0)

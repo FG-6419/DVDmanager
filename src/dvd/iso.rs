@@ -32,7 +32,7 @@ impl Img {
     fn sectors(&mut self, n: u64, count: usize) -> Res<Vec<u8>> {
         let mut b = vec![0u8; SECTOR * count];
         self.f.seek(SeekFrom::Start(n * SECTOR as u64)).map_err(|e| e.to_string())?;
-        self.f.read_exact(&mut b).map_err(|e| format!("Das ISO-Abbild ist zu kurz: {e}"))?;
+        self.f.read_exact(&mut b).map_err(|e| trf!("Das ISO-Abbild ist zu kurz: {e}", "The ISO image is too short: {e}"))?;
         Ok(b)
     }
 }
@@ -78,7 +78,7 @@ fn decode_cs0(d: &[u8]) -> String {
 fn read_udf(img: &mut Img) -> Res<(String, Entries)> {
     let avdp = img.sector(256)?;
     if tag_id(&avdp) != 2 {
-        return Err("kein UDF".into());
+        return Err(tr!("kein UDF", "no UDF").into());
     }
     let vds_len = le32(&avdp, 16) as usize;
     let vds_loc = u64::from(le32(&avdp, 20));
@@ -97,10 +97,10 @@ fn read_udf(img: &mut Img) -> Res<(String, Entries)> {
             _ => {}
         }
     }
-    let part = part_start.ok_or("UDF ohne Partition")?;
+    let part = part_start.ok_or(tr!("UDF ohne Partition", "UDF without partition"))?;
     let fsd = img.sector(part + fsd_lb.unwrap_or(0))?;
     if tag_id(&fsd) != 256 {
-        return Err("UDF ohne Dateisatz".into());
+        return Err(tr!("UDF ohne Dateisatz", "UDF without file set").into());
     }
     let root_lb = u64::from(le32(&fsd, 404));
 
@@ -108,7 +108,7 @@ fn read_udf(img: &mut Img) -> Res<(String, Entries)> {
     let vts = root
         .iter()
         .find(|(n, _, dir)| *dir && n.eq_ignore_ascii_case("VIDEO_TS"))
-        .ok_or("VIDEO_TS fehlt")?;
+        .ok_or(tr!("VIDEO_TS fehlt", "VIDEO_TS is missing"))?;
     let listing = read_dir_udf(img, part, vts.1)?;
     let mut out = Vec::new();
     for (name, lb, dir) in listing {
@@ -131,7 +131,7 @@ fn file_extents(img: &mut Img, part: u64, lb: u64) -> Res<(Vec<(u64, u64)>, u64)
     let (l_ea_o, l_ad_o, ad_o) = match tag {
         261 => (168, 172, 176),
         266 => (208, 212, 216),
-        _ => return Err("UDF-Dateieintrag ungültig".into()),
+        _ => return Err(tr!("UDF-Dateieintrag ungültig", "invalid UDF file entry").into()),
     };
     let flags = le16(&fe, 34) & 7;
     let size = le64(&fe, 56);
@@ -140,7 +140,7 @@ fn file_extents(img: &mut Img, part: u64, lb: u64) -> Res<(Vec<(u64, u64)>, u64)
     let start = ad_o + l_ea;
     let mut out = Vec::new();
     if start + l_ad > SECTOR {
-        return Err("UDF-Zuordnung zu lang".into());
+        return Err(tr!("UDF-Zuordnung zu lang", "UDF allocation too long").into());
     }
     match flags {
         0 => {
@@ -198,7 +198,7 @@ fn read_dir_udf(img: &mut Img, part: u64, lb: u64) -> Res<Vec<(String, u64, bool
 fn read_iso9660(img: &mut Img) -> Res<(String, Entries)> {
     let pvd = img.sector(16)?;
     if &pvd[1..6] != b"CD001" {
-        return Err("Die Datei ist kein lesbares DVD-Abbild.".into());
+        return Err(tr!("Die Datei ist kein lesbares DVD-Abbild.", "The file is not a readable DVD image.").into());
     }
     let label = String::from_utf8_lossy(&pvd[40..72]).trim().to_string();
     let root = &pvd[156..190];
@@ -208,7 +208,7 @@ fn read_iso9660(img: &mut Img) -> Res<(String, Entries)> {
     let vts = root_items
         .iter()
         .find(|e| e.3 && e.0.eq_ignore_ascii_case("VIDEO_TS"))
-        .ok_or("Im Abbild gibt es keinen Ordner VIDEO_TS.")?;
+        .ok_or(tr!("Im Abbild gibt es keinen Ordner VIDEO_TS.", "The image has no VIDEO_TS folder."))?;
     let items = iso9660_dir(img, vts.1, vts.2 as usize)?;
     // Sehr große Dateien stehen in mehreren Einträgen gleichen Namens; sie liegen am Stück.
     let mut out: Entries = Vec::new();
@@ -433,12 +433,12 @@ pub fn write_iso(
     let mut out = File::create(out_path).map_err(|e| format!("{}: {e}", out_path.display()))?;
     let write_at = |out: &mut File, sector: u32, data: &[u8]| -> Res<()> {
         out.seek(SeekFrom::Start(u64::from(sector) * SECTOR as u64)).map_err(|e| e.to_string())?;
-        out.write_all(data).map_err(|e| format!("ISO schreiben: {e}"))
+        out.write_all(data).map_err(|e| trf!("ISO schreiben: {e}", "Writing ISO: {e}"))
     };
 
     // Vorspann vollständig belegen
     let header_sectors = first_data as usize;
-    out.write_all(&vec![0u8; header_sectors * SECTOR]).map_err(|e| format!("ISO schreiben: {e}"))?;
+    out.write_all(&vec![0u8; header_sectors * SECTOR]).map_err(|e| trf!("ISO schreiben: {e}", "Writing ISO: {e}"))?;
 
     // --- ISO 9660 ---
     let mut pvd = vec![0u8; SECTOR];
@@ -541,7 +541,7 @@ pub fn write_iso(
     }
     let vts_dir_len = iso_vts.len().div_ceil(SECTOR) * SECTOR;
     if ISO_VTS_DIR as usize + vts_dir_len / SECTOR > 256 {
-        return Err("Zu viele Dateien für das ISO-Verzeichnis".into());
+        return Err(tr!("Zu viele Dateien für das ISO-Verzeichnis", "Too many files for the ISO directory").into());
     }
     let self_rec = iso_record(ISO_VTS_DIR, vts_dir_len as u32, true, &[0], &t);
     iso_vts[..self_rec.len()].copy_from_slice(&self_rec);
@@ -703,7 +703,7 @@ pub fn write_iso(
         push_fid(&mut dir_vts, &f.name, 0x00, f.fe_lb, lb);
     }
     if dir_vts.len() > vts_dir_secs as usize * SECTOR {
-        return Err("Interner Fehler: UDF-Verzeichnis zu groß".into());
+        return Err(tr!("Interner Fehler: UDF-Verzeichnis zu groß", "Internal error: UDF directory too large").into());
     }
     write_at(&mut out, PART + vts_dir, &dir_vts)?;
     write_at(&mut out, PART + vts_fe, &file_entry(vts_fe, true, 2, dir_vts.len() as u64, &[(PART + vts_dir, dir_vts.len() as u64)], 2, &t))?;
@@ -729,7 +729,7 @@ pub fn write_iso(
             extents.push((f.start, 0));
         }
         if 176 + extents.len() * 8 > SECTOR {
-            return Err(format!("{} ist für ein ISO-Abbild zu groß.", f.name));
+            return Err(trf!("{} ist für ein ISO-Abbild zu groß.", "{} is too large for an ISO image.", f.name));
         }
         let fe = file_entry(f.fe_lb, false, 1, f.size, &extents, 16 + i as u64, &t);
         write_at(&mut out, PART + f.fe_lb, &fe)?;
@@ -747,10 +747,10 @@ pub fn write_iso(
             if n == 0 {
                 break;
             }
-            out.write_all(&buf[..n]).map_err(|e| format!("ISO schreiben: {e}"))?;
+            out.write_all(&buf[..n]).map_err(|e| trf!("ISO schreiben: {e}", "Writing ISO: {e}"))?;
             done += n as u64;
             if !progress(done, total_bytes) {
-                return Err("Abgebrochen".into());
+                return Err(tr!("Abgebrochen", "Cancelled").into());
             }
         }
     }

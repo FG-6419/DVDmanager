@@ -79,7 +79,7 @@ impl App {
             }
         }
         if !errors.is_empty() {
-            self.error = Some(format!("Nicht alles ließ sich hinzufügen:\n{}", errors.join("\n")));
+            self.error = Some(trf!("Nicht alles ließ sich hinzufügen:\n{}", "Not everything could be added:\n{}", errors.join("\n")));
         }
     }
 
@@ -92,7 +92,7 @@ impl App {
             let done = items.iter().filter(|i| i.status.is_finished()).count();
             (run, items.len(), done, run.unwrap_or(0.0))
         };
-        let tip = if total == 0 { "Warteschlange: mehrere DVDs nacheinander sichern".to_string() } else { format!("Warteschlange ({done} von {total} erledigt)") };
+        let tip = if total == 0 { tr!("Warteschlange: mehrere DVDs nacheinander sichern", "Queue: back up several DVDs one after another").to_string() } else { trf!("Warteschlange ({done} von {total} erledigt)", "Queue ({done} of {total} done)") };
         if let Some(_) = running {
             ui.label(RichText::new(format!("{} / {}  ·  {:.0} %", done + 1, total, frac * 100.0)).size(12.5).color(p.accent));
         } else if total > 0 {
@@ -127,10 +127,10 @@ impl App {
         modal(ctx, &p, "warteschlange", 700.0, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(ic::QUEUE).size(24.0).color(p.accent));
-                ui.label(RichText::new("Warteschlange").family(semibold()).size(20.0));
+                ui.label(RichText::new(tr!("Warteschlange", "Queue")).family(semibold()).size(20.0));
             });
             ui.label(
-                RichText::new("Mehrere DVDs nacheinander sichern. Ziehe Ordner, ISO-Dateien oder Projekte einfach hierher.")
+                RichText::new(tr!("Mehrere DVDs nacheinander sichern. Ziehe Ordner, ISO-Dateien oder Projekte einfach hierher.", "Back up several DVDs one after another. Simply drag folders, ISO files or projects here."))
                     .size(13.0)
                     .color(p.muted),
             );
@@ -142,9 +142,9 @@ impl App {
                     ui.add_space(20.0);
                     ui.vertical_centered(|ui| {
                         ui.label(RichText::new(ic::QUEUE).size(32.0).color(p.faint));
-                        ui.label(RichText::new("Noch nichts in der Warteschlange.").color(p.muted));
+                        ui.label(RichText::new(tr!("Noch nichts in der Warteschlange.", "Nothing in the queue yet.")).color(p.muted));
                         ui.label(
-                            RichText::new("Im Backup-Dialog kannst du die aktuelle DVD mit allen Einstellungen hinzufügen.")
+                            RichText::new(tr!("Im Backup-Dialog kannst du die aktuelle DVD mit allen Einstellungen hinzufügen.", "In the backup dialog you can add the current DVD with all its settings."))
                                 .size(12.5)
                                 .color(p.faint),
                         );
@@ -173,12 +173,12 @@ impl App {
                                     let how = match &it.plan {
                                         PlanSource::Auto(a) => {
                                             if a.target_sectors >= discslim::engine::plan::NO_TARGET {
-                                                "Ganze DVD, ohne Größengrenze".to_string()
+                                                tr!("Ganze DVD, ohne Größengrenze", "Whole DVD, no size limit").to_string()
                                             } else {
-                                                format!("Ganze DVD, automatisch auf {}", fmt_size(a.target_sectors as f64))
+                                                trf!("Ganze DVD, automatisch auf {}", "Whole DVD, automatically to {}", fmt_size(a.target_sectors as f64))
                                             }
                                         }
-                                        PlanSource::Fixed { .. } => "Eigene Einstellungen".to_string(),
+                                        PlanSource::Fixed { .. } => tr!("Eigene Einstellungen", "Custom settings").to_string(),
                                     };
                                     ui.label(RichText::new(format!("{}. {}", k + 1, it.label)).family(semibold()).size(14.0));
                                     ui.label(RichText::new(format!("{how}  →  {}", it.output_path().display())).size(12.0).color(p.muted));
@@ -189,9 +189,9 @@ impl App {
                                             ui.label(RichText::new(format!("{:.0} %  ·  {}", it.fraction * 100.0, it.stage)).size(12.0).color(p.muted));
                                         }
                                         Status::Done(s) => {
-                                            let mut t = format!("Fertig: {} in {:.0} s", fmt_size(s.sectors as f64), s.seconds);
+                                            let mut t = trf!("Fertig: {} in {:.0} s", "Done: {} in {:.0} s", fmt_size(s.sectors as f64), s.seconds);
                                             if !s.fits {
-                                                t.push_str(" · größer als das Ziel");
+                                                t.push_str(tr!(" · größer als das Ziel", " · larger than the target"));
                                             }
                                             ui.label(RichText::new(t).size(12.0).color(if s.fits { p.good } else { p.warn }));
                                         }
@@ -199,24 +199,24 @@ impl App {
                                             ui.label(RichText::new(e).size(12.0).color(p.bad));
                                         }
                                         Status::Cancelled => {
-                                            ui.label(RichText::new("Abgebrochen").size(12.0).color(p.muted));
+                                            ui.label(RichText::new(tr!("Abgebrochen", "Cancelled")).size(12.0).color(p.muted));
                                         }
                                         Status::Waiting => {}
                                     }
                                 });
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                     let busy = matches!(it.status, Status::Running);
-                                    if !busy && style::icon_button(ui, &p, ic::TRASH, "Aus der Warteschlange nehmen").clicked() {
+                                    if !busy && style::icon_button(ui, &p, ic::TRASH, tr!("Aus der Warteschlange nehmen", "Remove from queue")).clicked() {
                                         remove = Some(it.id);
                                     }
-                                    if matches!(it.status, Status::Done(_)) && style::icon_button(ui, &p, ic::FOLDER_OPEN, "Im Explorer zeigen").clicked() {
+                                    if matches!(it.status, Status::Done(_)) && style::icon_button(ui, &p, ic::FOLDER_OPEN, tr!("Im Explorer zeigen", "Show in Explorer")).clicked() {
                                         reveal = Some(it.output_path().to_path_buf());
                                     }
                                     if matches!(it.status, Status::Waiting) {
-                                        if k + 1 < n && style::icon_button(ui, &p, ic::ARROW_DOWN, "Nach unten").clicked() {
+                                        if k + 1 < n && style::icon_button(ui, &p, ic::ARROW_DOWN, tr!("Nach unten", "Move down")).clicked() {
                                             move_by = Some((it.id, false));
                                         }
-                                        if k > 0 && style::icon_button(ui, &p, ic::ARROW_UP, "Nach oben").clicked() {
+                                        if k > 0 && style::icon_button(ui, &p, ic::ARROW_UP, tr!("Nach oben", "Move up")).clicked() {
                                             move_by = Some((it.id, true));
                                         }
                                     }
@@ -228,26 +228,26 @@ impl App {
 
             ui.add_space(8.0);
             ui.separator();
-            ui.label(RichText::new("Hinzufügen").family(semibold()).size(13.0).color(p.muted));
+            ui.label(RichText::new(tr!("Hinzufügen", "Add")).family(semibold()).size(13.0).color(p.muted));
             ui.horizontal(|ui| {
-                if soft_button(ui, &p, &format!("{}  DVD-Ordner …", ic::FOLDER_PLUS)).clicked() {
+                if soft_button(ui, &p, &trf!("{}  DVD-Ordner …", "{}  DVD folders …", ic::FOLDER_PLUS)).clicked() {
                     add_folders = true;
                 }
-                if soft_button(ui, &p, &format!("{}  ISO-Dateien …", ic::FILE_PLUS)).clicked() {
+                if soft_button(ui, &p, &trf!("{}  ISO-Dateien …", "{}  ISO files …", ic::FILE_PLUS)).clicked() {
                     add_isos = true;
                 }
-                if soft_button(ui, &p, &format!("{}  Projekte …", ic::FLOPPY_DISK)).clicked() {
+                if soft_button(ui, &p, &trf!("{}  Projekte …", "{}  Projects …", ic::FLOPPY_DISK)).clicked() {
                     add_projects = true;
                 }
             });
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Ausgabe").color(p.muted));
-                let opts = [(OutputKind::Iso, "ISO-Abbild"), (OutputKind::Folder, "Ordner")];
+                ui.label(RichText::new(tr!("Ausgabe", "Output")).color(p.muted));
+                let opts = [(OutputKind::Iso, tr!("ISO-Abbild", "ISO image")), (OutputKind::Folder, tr!("Ordner", "Folder"))];
                 segmented(ui, &p, &mut self.prefs.batch_kind, &opts, 220.0);
             });
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Zielordner").color(p.muted));
+                ui.label(RichText::new(tr!("Zielordner", "Target folder")).color(p.muted));
                 if self.prefs.batch_dir.is_empty() {
                     self.prefs.batch_dir = self.batch_dir().display().to_string();
                 }
@@ -255,22 +255,22 @@ impl App {
                     .desired_width(ui.available_width() - 110.0)
                     .margin(Margin::symmetric(10, 6));
                 ui.add(edit);
-                if soft_button(ui, &p, &format!("{}  Wählen", ic::FOLDER_OPEN)).clicked() {
+                if soft_button(ui, &p, &trf!("{}  Wählen", "{}  Choose", ic::FOLDER_OPEN)).clicked() {
                     let start = Some(PathBuf::from(self.prefs.batch_dir.trim())).filter(|d| d.is_dir()).unwrap_or_else(|| self.save_start_dir());
-                    if let Some(f) = rfd::FileDialog::new().set_title("Zielordner für die Warteschlange").set_directory(start).pick_folder() {
+                    if let Some(f) = rfd::FileDialog::new().set_title(tr!("Zielordner für die Warteschlange", "Target folder for the queue")).set_directory(start).pick_folder() {
                         self.note_save_dir(&f);
                         self.prefs.batch_dir = f.display().to_string();
                     }
                 }
             });
             let target = match self.prefs.target_kind {
-                TargetKind::Unlimited => "ohne Größengrenze".to_string(),
-                _ => format!("automatisch auf {}", fmt_size(target_sectors(&self.prefs) as f64)),
+                TargetKind::Unlimited => tr!("ohne Größengrenze", "no size limit").to_string(),
+                _ => trf!("automatisch auf {}", "automatically to {}", fmt_size(target_sectors(&self.prefs) as f64)),
             };
-            let lang = if self.prefs.only_lang { ", nur die bevorzugte Sprache" } else { "" };
+            let lang = if self.prefs.only_lang { tr!(", nur die bevorzugte Sprache", ", preferred language only") } else { "" };
             ui.label(
-                RichText::new(format!(
-                    "{}  Neue DVDs werden ganz übernommen und {target} verkleinert{lang}. Projekte behalten ihre eigenen Einstellungen.",
+                RichText::new(trf!(
+                    "{}  Neue DVDs werden ganz übernommen und {target} verkleinert{lang}. Projekte behalten ihre eigenen Einstellungen.", "{}  New DVDs are taken over completely and shrunk {target}{lang}. Projects keep their own settings.",
                     ic::INFO
                 ))
                 .size(12.5)
@@ -282,30 +282,30 @@ impl App {
             let finished = items.iter().filter(|i| i.status.is_finished()).count();
             let failed = items.iter().filter(|i| matches!(i.status, Status::Failed(_) | Status::Cancelled)).count();
             ui.horizontal(|ui| {
-                if finished > 0 && ui.add(egui::Button::new(RichText::new(format!("{}  Erledigte entfernen", ic::BROOM)).size(13.0))).clicked() {
+                if finished > 0 && ui.add(egui::Button::new(RichText::new(trf!("{}  Erledigte entfernen", "{}  Remove finished", ic::BROOM)).size(13.0))).clicked() {
                     clear = true;
                 }
-                if failed > 0 && ui.add(egui::Button::new(RichText::new(format!("{}  Erneut versuchen", ic::ARROW_COUNTER_CLOCKWISE)).size(13.0))).clicked() {
+                if failed > 0 && ui.add(egui::Button::new(RichText::new(trf!("{}  Erneut versuchen", "{}  Retry", ic::ARROW_COUNTER_CLOCKWISE)).size(13.0))).clicked() {
                     retry = true;
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if running {
-                        if primary_button(ui, &p, &format!("{}  Abbrechen", ic::STOP), true).clicked() {
+                        if primary_button(ui, &p, &trf!("{}  Abbrechen", "{}  Cancel", ic::STOP), true).clicked() {
                             cancel = true;
                         }
-                        if soft_button(ui, &p, "Nach diesem anhalten")
-                            .on_hover_text("Der laufende Eintrag wird fertig, danach hält die Warteschlange an.")
+                        if soft_button(ui, &p, tr!("Nach diesem anhalten", "Stop after this one"))
+                            .on_hover_text(tr!("Der laufende Eintrag wird fertig, danach hält die Warteschlange an.", "The current entry is finished, then the queue stops."))
                             .clicked()
                         {
                             stop_after = true;
                         }
                     } else {
-                        let label = if waiting == 1 { "1 DVD sichern".to_string() } else { format!("{waiting} DVDs sichern") };
+                        let label = if waiting == 1 { tr!("1 DVD sichern", "Back up 1 DVD").to_string() } else { trf!("{waiting} DVDs sichern", "Back up {waiting} DVDs") };
                         if primary_button(ui, &p, &format!("{}  {label}", ic::PLAY), waiting > 0).clicked() {
                             start = true;
                         }
                     }
-                    if soft_button(ui, &p, "Schließen").on_hover_text("Die Warteschlange läuft im Hintergrund weiter.").clicked() {
+                    if soft_button(ui, &p, tr!("Schließen", "Close")).on_hover_text(tr!("Die Warteschlange läuft im Hintergrund weiter.", "The queue keeps running in the background.")).clicked() {
                         close = true;
                     }
                 });
@@ -329,15 +329,15 @@ impl App {
         }
         let mut picked: Option<Vec<PathBuf>> = None;
         if add_folders {
-            picked = self.load_dialog("DVD-Ordner wählen (VIDEO_TS)").pick_folders();
+            picked = self.load_dialog(tr!("DVD-Ordner wählen (VIDEO_TS)", "Choose DVD folder (VIDEO_TS)")).pick_folders();
         }
         if add_isos {
-            picked = self.load_dialog("ISO-Abbilder wählen").add_filter("DVD-Abbild", &["iso", "img"]).pick_files();
+            picked = self.load_dialog(tr!("ISO-Abbilder wählen", "Choose ISO images")).add_filter(tr!("DVD-Abbild", "DVD image"), &["iso", "img"]).pick_files();
         }
         if add_projects {
             picked = self
-                .load_dialog("Projekte wählen")
-                .add_filter("DVDmanager-Projekt", &[discslim::engine::project::EXTENSION])
+                .load_dialog(tr!("Projekte wählen", "Choose projects"))
+                .add_filter(tr!("DVDmanager-Projekt", "DVDmanager project"), &[discslim::engine::project::EXTENSION])
                 .pick_files();
         }
         if let Some(list) = picked {

@@ -1,5 +1,9 @@
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
+// tr!/trf! für die Oberfläche
+#[macro_use]
+extern crate discslim;
+
 mod icon;
 mod ui;
 

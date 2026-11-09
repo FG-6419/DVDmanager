@@ -72,9 +72,9 @@ impl AudioAttr {
     pub fn ext_name(&self) -> &'static str {
         match self.ext {
             1 => "",
-            2 => "für Sehbehinderte",
-            3 => "Regiekommentar",
-            4 => "Regiekommentar",
+            2 => tr!("für Sehbehinderte", "for the visually impaired"),
+            3 => tr!("Regiekommentar", "Director's commentary"),
+            4 => tr!("Regiekommentar", "Director's commentary"),
             _ => "",
         }
     }
@@ -86,7 +86,7 @@ impl AudioAttr {
             6 => "5.1".into(),
             7 => "6.1".into(),
             8 => "7.1".into(),
-            n => format!("{n} Kanäle"),
+            n => trf!("{n} Kanäle", "{n} channels"),
         }
     }
 }
@@ -105,10 +105,10 @@ impl SubAttr {
 
     pub fn ext_name(&self) -> &'static str {
         match self.ext {
-            2 | 3 => "groß",
-            5 | 6 | 7 => "Hörgeschädigte",
+            2 | 3 => tr!("groß", "large"),
+            5 | 6 | 7 => tr!("Hörgeschädigte", "hearing impaired"),
             9 | 10 | 11 => "erzwungen",
-            13 | 14 | 15 => "Kommentar",
+            13 | 14 | 15 => tr!("Kommentar", "Commentary"),
             _ => "",
         }
     }
@@ -125,31 +125,31 @@ fn lang_code(a: u8, b: u8) -> String {
 /// Anzeigename einer Sprache.
 pub fn lang_name(code: &str) -> String {
     let n = match code {
-        "de" => "Deutsch",
-        "en" => "Englisch",
-        "fr" => "Französisch",
-        "es" => "Spanisch",
-        "it" => "Italienisch",
-        "nl" => "Niederländisch",
-        "pt" => "Portugiesisch",
-        "pl" => "Polnisch",
-        "ru" => "Russisch",
-        "tr" => "Türkisch",
-        "cs" => "Tschechisch",
-        "hu" => "Ungarisch",
-        "sv" => "Schwedisch",
-        "da" => "Dänisch",
-        "no" => "Norwegisch",
-        "fi" => "Finnisch",
-        "el" => "Griechisch",
-        "ja" => "Japanisch",
-        "ko" => "Koreanisch",
-        "zh" => "Chinesisch",
-        "ar" => "Arabisch",
-        "he" | "iw" => "Hebräisch",
+        "de" => tr!("Deutsch", "German"),
+        "en" => tr!("Englisch", "English"),
+        "fr" => tr!("Französisch", "French"),
+        "es" => tr!("Spanisch", "Spanish"),
+        "it" => tr!("Italienisch", "Italian"),
+        "nl" => tr!("Niederländisch", "Dutch"),
+        "pt" => tr!("Portugiesisch", "Portuguese"),
+        "pl" => tr!("Polnisch", "Polish"),
+        "ru" => tr!("Russisch", "Russian"),
+        "tr" => tr!("Türkisch", "Turkish"),
+        "cs" => tr!("Tschechisch", "Czech"),
+        "hu" => tr!("Ungarisch", "Hungarian"),
+        "sv" => tr!("Schwedisch", "Swedish"),
+        "da" => tr!("Dänisch", "Danish"),
+        "no" => tr!("Norwegisch", "Norwegian"),
+        "fi" => tr!("Finnisch", "Finnish"),
+        "el" => tr!("Griechisch", "Greek"),
+        "ja" => tr!("Japanisch", "Japanese"),
+        "ko" => tr!("Koreanisch", "Korean"),
+        "zh" => tr!("Chinesisch", "Chinese"),
+        "ar" => tr!("Arabisch", "Arabic"),
+        "he" | "iw" => tr!("Hebräisch", "Hebrew"),
         "hi" => "Hindi",
         "th" => "Thai",
-        "" => "Unbekannt",
+        "" => tr!("Unbekannt", "Unknown"),
         other => return other.to_uppercase(),
     };
     n.to_string()
@@ -404,7 +404,7 @@ pub struct Vmg {
 impl Vmg {
     pub fn parse(raw: Vec<u8>) -> Res<Self> {
         if raw.len() < SECTOR || &raw[0..12] != b"DVDVIDEO-VMG" {
-            return Err("VIDEO_TS.IFO ist beschädigt oder keine DVD-Datei.".into());
+            return Err(tr!("VIDEO_TS.IFO ist beschädigt oder keine DVD-Datei.", "VIDEO_TS.IFO is damaged or not a DVD file.").into());
         }
         let tt = be32(&raw, 0xC4);
         let mut titles = Vec::new();
@@ -472,7 +472,7 @@ pub struct Vts {
 impl Vts {
     pub fn parse(vts: u8, raw: Vec<u8>) -> Res<Self> {
         if raw.len() < SECTOR || &raw[0..12] != b"DVDVIDEO-VTS" {
-            return Err(format!("Die Tabelle von Titelset {vts} ist beschädigt."));
+            return Err(trf!("Die Tabelle von Titelset {vts} ist beschädigt.", "The table of title set {vts} is damaged."));
         }
         let video = VideoAttr::parse(&raw[0x200..0x202]);
         let nr_audio = (be16(&raw, 0x202) as usize).min(8);
