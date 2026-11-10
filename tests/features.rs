@@ -145,6 +145,29 @@ fn custom_chapter_marks() {
     assert_eq!(re.titles[0].chapters.len(), t.chapters.len());
 }
 
+/// Mittlere Farbe (R, G, B) des Bildes an einer Stelle eines Titels.
+fn frame_rgb(disc: &Disc, title: usize, ms: f64) -> [f64; 3] {
+    use discslim::engine::preview::{self, PreviewCmd};
+    let last = disc.titles[title].chapters.len() - 1;
+    let seg = preview::title_segments(disc, title, 0, last);
+    let h = preview::spawn(disc.source.clone(), seg, 0.0, None, 0, None);
+    h.cmd.send(PreviewCmd::SeekTime { ms, exact: true, id: 1 }).unwrap();
+    loop {
+        let f = h.frames.recv_timeout(std::time::Duration::from_secs(10)).expect("kein Bild");
+        if f.seek_id == 1 && !f.eos {
+            let mut acc = [0f64; 3];
+            let mut n = 0.0;
+            for c in f.rgba.chunks_exact(4) {
+                for k in 0..3 {
+                    acc[k] += f64::from(c[k]);
+                }
+                n += 1.0;
+            }
+            return acc.map(|v| v / n);
+        }
+    }
+}
+
 /// Mittlere Helligkeit (0..255) des Bildes an einer Stelle eines Titels.
 fn brightness(disc: &Disc, title: usize, ms: f64) -> f64 {
     use discslim::engine::preview::{self, PreviewCmd};
@@ -263,6 +286,71 @@ fn fades_at_cut_points() {
                 assert!((got - want).abs() < 6.0, "nach der Blende bei {t} ms: {got} statt {want}");
             }
         }
+    }
+}
+
+#[test]
+fn scene_detection_splits_title() {
+    use discslim::engine::scenes::{scan, split_entry};
+    let w = work("szenen");
+    let src = demo::build_sample(&w, |_| {}).unwrap();
+    let disc = open_analysed(&src);
+    let ti = longest_title(&disc);
+    let last = disc.titles[ti].chapters.len() - 1;
+    let mut e = ReauthorEntry::new(ti, 0, last, ItemSettings::default());
+    let total = entry_duration_ms(&disc, &e);
+    e.cut = Cut::whole(total, false);
+    // Im Beispiel wechseln an jedem Kapitelanfang Farbe und Ziffer
+    let chapters = e.original_marks(&disc);
+    assert_eq!(chapters.len(), 3);
+
+    let cancel = AtomicBool::new(false);
+    let mut last_p = 0.0;
+    let res = scan(&disc, &e, &cancel, &mut |p| last_p = p).unwrap();
+    assert!((last_p - 1.0).abs() < 1e-6);
+    for c in res.candidates.iter().filter(|c| c.score > 0.05) {
+        println!("Kandidat {} ms (genau {:?}): Stärke {:.3}, Umgebung {:.3}", c.at_ms, c.exact_ms, c.score, c.base);
+    }
+    for exact in [false, true] {
+        let cuts = res.cuts(0.5, 2_000, exact);
+        println!("bildgenau={exact}: {cuts:?}, Kapitel {chapters:?}");
+        assert_eq!(cuts.len(), chapters.len(), "Szenen {cuts:?} statt {chapters:?}");
+        for (c, k) in cuts.iter().zip(&chapters) {
+            let tol = if exact { 45 } else { 260 };
+            assert!(c.abs_diff(*k) <= tol, "Wechsel bei {c} statt {k}");
+        }
+    }
+    // Hohe Mindestlänge fasst zusammen, geringe Empfindlichkeit findet nichts Kleines
+    assert!(res.cuts(0.5, 30_000, false).len() < 3);
+    // Abbruch
+    cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert!(scan(&disc, &e, &cancel, &mut |_| {}).is_err());
+
+    // Aufteilen und sichern: vier Einträge, zusammen so lang wie der Titel
+    let cuts = res.cuts(0.5, 2_000, true);
+    let parts = split_entry(&disc, &e, &cuts, true);
+    assert_eq!(parts.len(), 4);
+    assert_eq!(parts[0].cut.start_ms, Some(0));
+    assert_eq!(parts[3].cut.end_ms, Some(total));
+    let mut plan = Plan::new(NO_TARGET);
+    plan.mode = Mode::Reauthor;
+    plan.reauthor = parts;
+    let out = w.join("ausgabe");
+    run_backup(open_analysed(&src), plan, Output::Folder(out.clone()));
+    let vdir = out.join("VIDEO_TS");
+    check_cells(&vdir);
+    let re = open_analysed(&vdir);
+    assert_eq!(re.titles.len(), 4);
+    let sum: u64 = re.titles.iter().map(|t| t.ms).sum();
+    println!("Längen {:?}, Summe {sum} von {total}", re.titles.iter().map(|t| t.ms).collect::<Vec<_>>());
+    assert!(sum.abs_diff(total) < 400, "Summe {sum} statt {total}");
+    // Jeder Teil zeigt nur eine Szene: Anfang und Ende gleich gefärbt
+    for k in 0..4 {
+        let len = re.titles[k].ms as f64;
+        let a = frame_rgb(&re, k, 100.0);
+        let b = frame_rgb(&re, k, len - 100.0);
+        let d: f64 = a.iter().zip(&b).map(|(x, y)| (x - y).abs()).sum();
+        assert!(d < 40.0, "Teil {k} enthält zwei Szenen: {a:?} / {b:?}");
     }
 }
 

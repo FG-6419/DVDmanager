@@ -1045,6 +1045,14 @@ impl App {
             ui.label(RichText::new(trf!("Länge nach dem Schnitt: {}", "Length after cut: {}", fmt_time(len))).size(13.0));
         }
         let _ = changed;
+        ui.add_space(2.0);
+        let scenes = soft_button(ui, &p, &format!("{}  {}", ic::FILM_STRIP, tr!("Szenen erkennen …", "Detect scenes …")))
+            .on_hover_text(tr!("Teilt den Eintrag an Szenenwechseln in einzelne Einträge", "Splits the entry into separate entries at scene changes"));
+        if scenes.clicked() {
+            let ctx = ui.ctx().clone();
+            self.open_scene_dialog(i, &ctx);
+        }
+        let cut = &self.plan.reauthor[i].cut;
         ui.add_space(4.0);
         // Blenden brauchen Neukodierung, deshalb nur beim bildgenauen Schnitt
         if cut.exact {

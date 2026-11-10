@@ -9,4 +9,5 @@ pub mod cut;
 pub mod plan;
 pub mod preview;
 pub mod project;
+pub mod scenes;
 pub mod transcode;

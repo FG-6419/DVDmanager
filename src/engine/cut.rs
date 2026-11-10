@@ -60,7 +60,7 @@ pub fn mark_broken_link(data: &mut [u8]) {
     }
 }
 
-fn video_es(data: &[u8]) -> Vec<u8> {
+pub(crate) fn video_es(data: &[u8]) -> Vec<u8> {
     let mut es = Vec::with_capacity(data.len());
     for s in data.chunks_exact(SECTOR) {
         if classify(s) == Stream::Video {

@@ -194,6 +194,7 @@ impl App {
 
         self.dialog_backup(ctx);
         self.dialog_queue(ctx);
+        self.dialog_scenes(ctx);
         self.dialog_job(ctx);
         self.dialog_result(ctx);
         self.dialog_settings(ctx);
