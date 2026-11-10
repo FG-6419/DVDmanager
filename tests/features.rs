@@ -451,6 +451,115 @@ fn mpeg_timestamps_continuous() {
     }
 }
 
+/// Tonströme einer MPEG-Datei: Spur -> (Nutzdaten, Zeitstempel je Paket als (Lage, PTS)).
+fn audio_streams(data: &[u8]) -> Vec<(u8, discslim::engine::audio::Codec, Vec<u8>, Vec<(usize, u64)>)> {
+    use discslim::engine::audio::Codec;
+    let mut out: Vec<(u8, Codec, Vec<u8>, Vec<(usize, u64)>)> = Vec::new();
+    for s in data.chunks_exact(SECTOR) {
+        if !is_pack(s) {
+            continue;
+        }
+        let mut p = pack_header_len(s);
+        while p + 9 <= s.len() && s[p] == 0 && s[p + 1] == 0 && s[p + 2] == 1 {
+            let id = s[p + 3];
+            let end = (p + 6 + usize::from(u16::from_be_bytes([s[p + 4], s[p + 5]]))).min(s.len());
+            if id != 0xBD && !(0xC0..=0xC7).contains(&id) {
+                p = end;
+                continue;
+            }
+            let pts = (s[p + 7] & 0x80 != 0).then(|| read_ts(&s[p + 9..]));
+            let mut q = p + 9 + usize::from(s[p + 8]);
+            let key = match id {
+                0xBD if (0x80..=0x87).contains(&s[q]) => {
+                    q += 4;
+                    (s[q - 4], Codec::Ac3)
+                }
+                0xBD => {
+                    p = end;
+                    continue;
+                }
+                _ => (id, Codec::Mpeg),
+            };
+            let at = match out.iter().position(|o| o.0 == key.0) {
+                Some(i) => i,
+                None => {
+                    out.push((key.0, key.1, Vec::new(), Vec::new()));
+                    out.len() - 1
+                }
+            };
+            if let Some(t) = pts {
+                let off = out[at].2.len();
+                out[at].3.push((off, t));
+            }
+            out[at].2.extend_from_slice(&s[q..end]);
+            p = end;
+        }
+    }
+    out
+}
+
+/// Bytes im Tonstrom, die zu keinem vollständigen Rahmen gehören.
+fn audio_garbage(es: &[u8], codec: discslim::engine::audio::Codec) -> Vec<(usize, usize)> {
+    use discslim::engine::audio::{find_sync, frame_len};
+    let mut bad = Vec::new();
+    let mut pos = 0;
+    let chained = |p: usize| -> bool {
+        frame_len(&es[p..], codec).is_some_and(|l| l > 4 && (p + l == es.len() || (p + l + 1 < es.len() && find_sync(es, p + l, codec) == Some(p + l))))
+    };
+    while pos < es.len() {
+        if chained(pos) {
+            pos += frame_len(&es[pos..], codec).unwrap();
+            continue;
+        }
+        let start = pos;
+        pos += 1;
+        while pos < es.len() && !chained(pos) {
+            pos += 1;
+        }
+        bad.push((start, pos - start));
+    }
+    bad
+}
+
+/// Echte DVD mit AC-3- oder MPEG-Ton: DVDMANAGER_REAL_ISO=Pfad cargo test real_disc_audio -- --ignored
+#[test]
+#[ignore]
+fn real_disc_audio_splices() {
+    let Ok(iso) = std::env::var("DVDMANAGER_REAL_ISO") else { return };
+    let w = work("echte_dvd_ton");
+    let title: usize = std::env::var("DVDMANAGER_REAL_TITLE").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let chapter: usize = std::env::var("DVDMANAGER_REAL_CHAPTER").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let cuts: Vec<(u64, u64)> = std::env::var("DVDMANAGER_REAL_CUTS")
+        .unwrap_or("366120-376000,481560-491840,676920-686360".into())
+        .split(',')
+        .map(|p| {
+            let (a, b) = p.split_once('-').unwrap();
+            (a.parse().unwrap(), b.parse().unwrap())
+        })
+        .collect();
+    let mut failures = Vec::new();
+    for exact in [true, false] {
+        let mut plan = Plan::new(NO_TARGET);
+        plan.mode = Mode::Reauthor;
+        for (a, b) in &cuts {
+            let mut e = ReauthorEntry::new(title, chapter, chapter, ItemSettings::default());
+            e.cut = Cut { start_ms: Some(*a), end_ms: Some(*b), exact };
+            plan.reauthor.push(e);
+        }
+        let out = w.join(format!("schnitt_{exact}.mpg"));
+        run_backup(open_analysed(Path::new(&iso)), plan, Output::Mpeg { path: out.clone(), audio: None });
+        let data = std::fs::read(&out).unwrap();
+        for (id, codec, es, _) in audio_streams(&data) {
+            let bad = audio_garbage(&es, codec);
+            println!("bildgenau={exact} Spur {id:#x} {codec:?}: {} Bytes, Bruchstellen {bad:?}", es.len());
+            if !bad.is_empty() {
+                failures.push(format!("bildgenau={exact}: angeschnittene Tonrahmen in Spur {id:#x}: {bad:?}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
 #[test]
 fn project_file_round_trip() {
     let w = work("projekt");

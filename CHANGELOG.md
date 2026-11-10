@@ -2,6 +2,13 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.008 · 2026-11-10 19:49
+
+- Knacken im Ton an Schnittstellen behoben (vor allem in Kodi hörbar): Am Anfang und Ende jedes Eintrags blieben angeschnittene Tonrahmen stehen. Sie werden jetzt aus den Paketen entfernt, der Ton beginnt und endet mit vollständigen Rahmen (AC-3 und MPEG-Ton).
+- Bildgenauer Schnitt: Ton am Ende eines Abschnitts ging verloren, weil er auf vielen DVDs etwas nach dem Bild im Datenstrom liegt. Er wird jetzt mitgenommen, auch aus dem Block hinter dem Schnitt.
+- Bildgenauer Schnitt: Die Systemuhr eines angeschnittenen Blocks rückt mit dem Schnitt mit. Bisher entstand dadurch beim Aneinanderfügen eine Lücke von bis zu einer halben Sekunde in Bild und Ton.
+- Ton und Bild treffen an jeder Schnittstelle auf etwa einen Tonrahmen genau zusammen.
+
 ## 1.0.007 · 2026-11-10 19:12
 
 - Überschriebene Dateien (MPEG, VOB, ISO, DVD-Ordner, Projekte) bekommen ein neues Erstelldatum. Windows behielt beim Überschreiben bisher das alte, und der Explorer zeigte deshalb die Uhrzeit der ersten Ausgabe.

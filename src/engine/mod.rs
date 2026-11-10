@@ -10,4 +10,5 @@ pub mod plan;
 pub mod preview;
 pub mod project;
 pub mod scenes;
+pub mod splice;
 pub mod transcode;

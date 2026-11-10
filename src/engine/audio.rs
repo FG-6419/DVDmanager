@@ -513,7 +513,7 @@ fn lpcm_to_stereo(data: &[u8], bits: u8, rate: u32, ch: u8) -> Vec<i16> {
     out
 }
 
-fn find_sync(d: &[u8], from: usize, codec: Codec) -> Option<usize> {
+pub fn find_sync(d: &[u8], from: usize, codec: Codec) -> Option<usize> {
     let mut i = from;
     while i + 1 < d.len() {
         let ok = match codec {
@@ -530,7 +530,7 @@ fn find_sync(d: &[u8], from: usize, codec: Codec) -> Option<usize> {
 }
 
 /// Länge eines Rahmens in Bytes.
-fn frame_len(d: &[u8], codec: Codec) -> Option<usize> {
+pub fn frame_len(d: &[u8], codec: Codec) -> Option<usize> {
     match codec {
         Codec::Ac3 => {
             if d.len() < 5 {

@@ -9,6 +9,7 @@ use crate::dvd::vob::*;
 use crate::dvd::{be32, put16, put32, Res, SECTOR};
 use crate::engine::audiofade::{fade_audio, FadeVobu};
 use crate::engine::plan::{FadeKind, ReauthorEntry};
+use crate::engine::splice::{append_tail_audio, AudioSplicer};
 use crate::engine::transcode::VobuReader;
 use crate::mpeg2::bits::next_start_code;
 use crate::mpeg2::decode::{Decoder, FrameClock};
@@ -201,7 +202,10 @@ pub fn rebuild_vobu_with(
             _ => continue,
         };
         if let Some(p) = pes_pts(s) {
-            keep_state[kind][idx] = p + frame90 >= first_pts && (until_ms.is_none() || p < end_pts);
+            // Der Ton liegt im Datenstrom oft etwas hinter dem Bild. Eine Grenze gilt daher
+            // nur dort, wo wirklich geschnitten wird.
+            keep_state[kind][idx] =
+                (from_ms.is_none() || p + frame90 >= first_pts) && (until_ms.is_none() || p < end_pts);
         }
         if keep_state[kind][idx] {
             others.push(s.to_vec());
@@ -212,12 +216,29 @@ pub fn rebuild_vobu_with(
     let n_v = video_packs.len();
     let n_o = others.len();
     let total_packs = 1 + n_v + n_o;
-    let nav_scr = get_scr(nav);
-    let last_scr = input.iter().rev().find(|s| is_pack(s)).map(|s| get_scr(s)).unwrap_or(nav_scr);
+    let orig_scr = get_scr(nav);
+    let orig_last = input.iter().rev().find(|s| is_pack(s)).map(|s| get_scr(s)).unwrap_or(orig_scr);
+    // Die Systemuhr rückt um den abgeschnittenen Anfang vor und endet um das abgeschnittene
+    // Ende früher. Sonst passt sie nicht mehr zu den Zeitstempeln, und beim Aneinanderfügen
+    // entstünde eine Lücke in Bild und Ton.
+    let e_ptm = u64::from(be32(data, PCI_OFF + 16));
+    let head_trim = if from_ms.is_some() { first_pts.saturating_sub(s_ptm) * 300 } else { 0 };
+    let tail_trim = if until_ms.is_some() && e_ptm > end_pts { (e_ptm - end_pts) * 300 } else { 0 };
+    let need = total_packs as u64 * SCR_TICK;
+    let room = orig_last.saturating_sub(orig_scr);
+    let (nav_scr, last_scr) = if room > need {
+        let spare = room - need;
+        let head = head_trim.min(spare);
+        let tail = tail_trim.min(spare - head);
+        (orig_scr + head, orig_last - tail)
+    } else {
+        (orig_scr, orig_last)
+    };
     let window = last_scr.saturating_sub(nav_scr);
     let step = (window / total_packs as u64).max(SCR_TICK);
     let mut out = Vec::with_capacity(total_packs * SECTOR);
     out.extend_from_slice(nav);
+    put_scr(&mut out[..SECTOR], nav_scr);
     let (mut vi, mut oi) = (0usize, 0usize);
     let mut video_index: Vec<usize> = Vec::with_capacity(n_v);
     let mut first_of_stream = [[None::<usize>; 32]; 2];
@@ -301,10 +322,45 @@ pub enum StreamEvent<'a> {
     Skipped(u64),
 }
 
-/// Liefert alle VOBUs eines Eintrags in Abspielreihenfolge, schon geschnitten.
+/// Liefert alle VOBUs eines Eintrags in Abspielreihenfolge, schon geschnitten. Der Ton
+/// beginnt und endet dabei mit vollständigen Rahmen (siehe `splice`).
 pub fn entry_stream<'a>(
     disc: &'a Disc,
     entry: &ReauthorEntry,
+    mut sink: impl FnMut(StreamEvent<'a>) -> Res<()>,
+) -> Res<()> {
+    let mut splicer = AudioSplicer::default();
+    let mut held: Option<EntryVobu<'a>> = None;
+    let mut after: Option<Vec<u8>> = None;
+    entry_stream_raw(disc, entry, &mut after, |ev| match ev {
+        StreamEvent::Vobu(v) => {
+            let mut v = v;
+            let data = std::mem::take(&mut v.data);
+            let prev = held.replace(v);
+            if let Some(clean) = splicer.push(data) {
+                let mut p = prev.expect("zurückgehaltene VOBU");
+                p.data = clean;
+                sink(StreamEvent::Vobu(p))?;
+            }
+            Ok(())
+        }
+        other => sink(other),
+    })?;
+    if let Some(next) = after {
+        splicer.extend_last(&next);
+    }
+    if let (Some(mut last), Some(data)) = (held, splicer.finish()) {
+        last.data = data;
+        sink(StreamEvent::Vobu(last))?;
+    }
+    Ok(())
+}
+
+/// `after`: die erste VOBU hinter dem Eintrag, falls sie gelesen wurde.
+fn entry_stream_raw<'a>(
+    disc: &'a Disc,
+    entry: &ReauthorEntry,
+    after: &mut Option<Vec<u8>>,
     mut sink: impl FnMut(StreamEvent<'a>) -> Res<()>,
 ) -> Res<()> {
     let t = disc.titles.get(entry.title).ok_or(tr!("Titel nicht gefunden", "Title not found"))?;
@@ -362,6 +418,12 @@ pub fn entry_stream<'a>(
                 }
                 if t0 >= cut_out {
                     sink(StreamEvent::Skipped(in_sectors))?;
+                    // Der Ton zu den letzten Bildern liegt oft erst in dieser VOBU. Wartet die
+                    // letzte VOBU noch auf die Ton-Blende, kommt er gleich mit hinein.
+                    match held.last_mut() {
+                        Some((v, _, _)) => append_tail_audio(&mut v.data, &data),
+                        None => *after = Some(data),
+                    }
                     break 'cells;
                 }
                 let head = exact && cut_in > t0 && cut_in < t1;
