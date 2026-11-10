@@ -30,6 +30,8 @@ pub struct PreviewState {
     /// Kapitel: Beginn (Millisekunden) und Bezeichnung
     chapters: Vec<(u64, String)>,
     drag: Option<f32>,
+    /// Beim Ziehen auf der Zeitleiste: zuletzt angesprungene Stelle (Titelzeit) und wann
+    drag_live: Option<(f64, Instant)>,
     has_frame: bool,
     /// Anzeigezeit des gezeigten Bildes
     time_ms: Option<u64>,
@@ -872,7 +874,26 @@ impl App {
         }
         if resp.is_pointer_button_down_on() {
             if let Some(pos) = resp.interact_pointer_pos() {
-                st.drag = Some(((pos.x - track.left()) / track.width().max(1.0)).clamp(0.0, 1.0));
+                let f = ((pos.x - track.left()) / track.width().max(1.0)).clamp(0.0, 1.0);
+                st.drag = Some(f);
+                // Beim Ziehen laufend mitspringen (am Schlüsselbild, das geht schnell).
+                // Ein neuer Sprung erst, wenn das vorige Bild da ist oder es zu lange dauert.
+                let (k, t) = if prog_mode {
+                    let (offs, _) = st.prog_offsets();
+                    let g = f64::from(f) * g_total;
+                    let k = offs.iter().rposition(|o| *o <= g).unwrap_or(0);
+                    (k, st.prog.get(k).map(|c| c.1 + (g - offs[k])).unwrap_or(0.0))
+                } else {
+                    (st.prog_cur, lo + f64::from(f) * (hi - lo))
+                };
+                let ready = !st.want_frame || st.drag_live.is_none_or(|(_, at)| at.elapsed().as_millis() > 300);
+                let moved = st.drag_live.is_none_or(|(last, _)| (last - t).abs() > 40.0);
+                // Bei "Alle Schnitte" nur innerhalb des laufenden Eintrags (ein Wechsel lädt neu)
+                if ready && moved && (!prog_mode || k == st.prog_cur) {
+                    st.seek_time(t, false);
+                    st.drag_live = Some((t, Instant::now()));
+                }
+                ui.ctx().request_repaint_after(Duration::from_millis(16));
             }
         }
         // Rechtsklick: an dieser Stelle Schnittanfang oder -ende des passenden Eintrags setzen
@@ -909,6 +930,7 @@ impl App {
             });
         }
         if resp.drag_stopped() || resp.clicked() {
+            st.drag_live = None;
             if let Some(f) = st.drag.take() {
                 if prog_mode {
                     st.prog_seek_global(f64::from(f) * g_total);
