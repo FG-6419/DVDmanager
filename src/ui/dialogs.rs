@@ -697,7 +697,7 @@ impl App {
         let p = self.pal;
         let mut close = false;
         let mut dark = p.dark;
-        let dirs_before = (self.prefs.load_dir.clone(), self.prefs.save_dir.clone());
+        let dirs_before = (self.prefs.load_dir.clone(), self.prefs.save_dir.clone(), self.prefs.project_dir.clone());
         modal(ctx, &p, "einstellungen", 520.0, |ui| {
             ui.label(RichText::new(tr!("Einstellungen", "Settings")).family(semibold()).size(20.0));
             ui.add_space(4.0);
@@ -735,7 +735,8 @@ impl App {
             ui.label(RichText::new(tr!("Verzeichnisse", "Folders")).family(semibold()).size(13.0).color(p.muted));
             for (label, value, title) in [
                 (tr!("Laden", "Load"), &mut self.prefs.load_dir, tr!("Hauptverzeichnis zum Laden von DVDs, ISOs und Projekten", "Main folder for loading DVDs, ISOs and projects")),
-                (tr!("Speichern", "Save"), &mut self.prefs.save_dir, tr!("Hauptverzeichnis für Backups und Projekte", "Main folder for backups and projects")),
+                (tr!("Speichern", "Save"), &mut self.prefs.save_dir, tr!("Hauptverzeichnis für Backups", "Main folder for backups")),
+                (tr!("Projekte", "Projects"), &mut self.prefs.project_dir, tr!("Ordner zum Laden und Speichern von Projekten", "Folder for loading and saving projects")),
             ] {
                 ui.horizontal(|ui| {
                     ui.add_sized([70.0, 24.0], egui::Label::new(RichText::new(label).color(p.muted)));
@@ -758,7 +759,7 @@ impl App {
                     }
                 });
             }
-            for v in [&self.prefs.load_dir, &self.prefs.save_dir] {
+            for v in [&self.prefs.load_dir, &self.prefs.save_dir, &self.prefs.project_dir] {
                 if !v.trim().is_empty() && !Path::new(v.trim()).is_dir() {
                     ui.label(RichText::new(trf!("{}  „{}“ gibt es nicht.", "{}  \"{}\" does not exist.", ic::WARNING, v.trim())).size(12.5).color(p.warn));
                 }
@@ -790,6 +791,9 @@ impl App {
         if self.prefs.save_dir != dirs_before.1 {
             self.last_save_dir = None;
             self.prefs.batch_dir.clear();
+        }
+        if self.prefs.project_dir != dirs_before.2 {
+            self.last_project_dir = None;
         }
         if close {
             self.settings_open = false;

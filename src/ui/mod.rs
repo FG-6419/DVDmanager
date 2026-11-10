@@ -142,6 +142,8 @@ pub struct Prefs {
     /// Hauptverzeichnisse aus den Einstellungen: dort öffnen die Dialoge nach dem Start.
     pub load_dir: String,
     pub save_dir: String,
+    /// Ordner für Projektdateien (Öffnen und Speichern)
+    pub project_dir: String,
 }
 
 impl Default for Prefs {
@@ -169,6 +171,7 @@ impl Default for Prefs {
             batch_dir: String::new(),
             load_dir: String::new(),
             save_dir: String::new(),
+            project_dir: String::new(),
         }
     }
 }
@@ -216,6 +219,8 @@ pub struct App {
     /// Zuletzt gewählte Orte in dieser Sitzung (zum Laden bzw. Speichern)
     last_load_dir: Option<PathBuf>,
     last_save_dir: Option<PathBuf>,
+    /// In dieser Sitzung zuletzt gewählter Projektordner
+    last_project_dir: Option<PathBuf>,
     /// Nur im Entwicklungs-Build: springt für Prüfbilder in einen bestimmten Zustand.
     #[cfg(debug_assertions)]
     dev_state: Option<String>,
@@ -270,6 +275,9 @@ impl App {
             }
             if let Some(v) = st.get_string("load_dir") {
                 prefs.load_dir = v;
+            }
+            if let Some(v) = st.get_string("project_dir") {
+                prefs.project_dir = v;
             }
             if let Some(v) = st.get_string("save_dir") {
                 prefs.save_dir = v;
@@ -351,6 +359,7 @@ impl App {
             scene_dlg: None,
             last_load_dir: None,
             last_save_dir: None,
+            last_project_dir: None,
             #[cfg(debug_assertions)]
             dev_state: std::env::var("DISCSLIM_DEV_STATE").ok(),
         };
@@ -464,10 +473,28 @@ impl App {
         rfd::FileDialog::new().set_title(title).set_directory(self.save_start_dir())
     }
 
+    /// Startort für Projektdialoge: in dieser Sitzung zuletzt gewählt, sonst der
+    /// Projektordner aus den Einstellungen.
+    fn project_start_dir(&self) -> Option<PathBuf> {
+        self.last_project_dir
+            .clone()
+            .or_else(|| Some(PathBuf::from(self.prefs.project_dir.trim())).filter(|p| !p.as_os_str().is_empty()))
+            .filter(|p| p.is_dir())
+    }
+
+    fn note_project_dir(&mut self, file: &Path) {
+        if let Some(d) = file.parent().filter(|d| !d.as_os_str().is_empty()) {
+            self.last_project_dir = Some(d.to_path_buf());
+        }
+    }
+
     pub(super) fn pick_project(&mut self, ctx: &egui::Context) {
-        let d = self.load_dialog(tr!("Projekt öffnen", "Open project")).add_filter(tr!("DVDmanager-Projekt", "DVDmanager project"), &[project::EXTENSION]);
+        let mut d = self.load_dialog(tr!("Projekt öffnen", "Open project")).add_filter(tr!("DVDmanager-Projekt", "DVDmanager project"), &[project::EXTENSION]);
+        if let Some(dir) = self.project_start_dir() {
+            d = d.set_directory(dir);
+        }
         if let Some(p) = d.pick_file() {
-            self.note_load(&p);
+            self.note_project_dir(&p);
             self.open_project(ctx, &p);
         }
     }
@@ -489,23 +516,32 @@ impl App {
                     .save_dialog(tr!("Projekt speichern", "Save project"))
                     .add_filter(tr!("DVDmanager-Projekt", "DVDmanager project"), &[project::EXTENSION])
                     .set_file_name(name);
-                // Ein schon gespeichertes Projekt bleibt in seinem Ordner.
-                if let Some(dir) = self.project_path.as_ref().and_then(|p| p.parent()).filter(|d| d.is_dir()) {
+                // Ein schon gespeichertes Projekt bleibt in seinem Ordner, neue kommen in den Projektordner.
+                let dir = self
+                    .project_path
+                    .as_ref()
+                    .and_then(|p| p.parent())
+                    .filter(|d| d.is_dir())
+                    .map(Path::to_path_buf)
+                    .or_else(|| self.project_start_dir());
+                if let Some(dir) = dir {
                     d = d.set_directory(dir);
                 }
                 let Some(mut p) = d.save_file() else { return };
                 if !Project::is_project_path(&p) {
                     p.set_extension(project::EXTENSION);
                 }
-                if let Some(dir) = p.parent() {
-                    self.note_save_dir(&dir.to_path_buf());
-                }
+                self.note_project_dir(&p);
                 p
             }
         };
         match Project::new(&disc, &self.plan).save(&path) {
             Ok(()) => {
-                self.notice = Some((trf!("Projekt gespeichert: {}", "Project saved: {}", path.file_name().unwrap_or_default().to_string_lossy()), Instant::now()));
+                let time = clock_now();
+                self.notice = Some((
+                    trf!("Projekt gespeichert: {} ({time})", "Project saved: {} ({time})", path.file_name().unwrap_or_default().to_string_lossy()),
+                    Instant::now(),
+                ));
                 self.project_path = Some(path);
             }
             Err(e) => self.error = Some(trf!("Das Projekt konnte nicht gespeichert werden.\n{e}", "The project could not be saved.\n{e}")),
@@ -803,6 +839,17 @@ impl App {
     fn apply_dev_state(&mut self, ctx: &egui::Context) {
         let Some(state) = self.dev_state.clone() else { return };
         match (state.as_str(), self.frames) {
+            ("save", _) if self.disc.is_some() && self.loader.is_none() => {
+                // Projekt laden, speichern, beenden (prüft, ob wirklich geschrieben wird)
+                let before = format!("{:?}", self.project_path);
+                self.save_project(false);
+                let _ = std::fs::write(
+                    std::env::var("DISCSLIM_DEV_LOG").unwrap_or_else(|_| "devlog.txt".into()),
+                    format!("vorher {before}\nnachher {:?}\nMeldung {:?}\nFehler {:?}\n", self.project_path, self.notice.as_ref().map(|n| n.0.clone()), self.error),
+                );
+                self.dev_state = None;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
             ("backup", 5) => self.open_backup_dialog(),
             ("about", 5) => self.about_open = true,
             ("cut" | "cutview", 5) => {
@@ -1049,6 +1096,21 @@ impl App {
     }
 }
 
+/// Aktuelle Ortszeit als „HH:MM:SS“.
+fn clock_now() -> String {
+    #[cfg(windows)]
+    {
+        // SAFETY: GetLocalTime füllt nur die zurückgegebene Struktur.
+        let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+        format!("{:02}:{:02}:{:02}", t.wHour, t.wMinute, t.wSecond)
+    }
+    #[cfg(not(windows))]
+    {
+        let s = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) % 86_400;
+        format!("{:02}:{:02}:{:02} UTC", s / 3600, s / 60 % 60, s % 60)
+    }
+}
+
 fn save_png(path: &Path, img: &egui::ColorImage) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -1196,6 +1258,7 @@ impl eframe::App for App {
         storage.set_string("ui_lang", discslim::i18n::lang().code().into());
         storage.set_string("load_dir", self.prefs.load_dir.clone());
         storage.set_string("save_dir", self.prefs.save_dir.clone());
+        storage.set_string("project_dir", self.prefs.project_dir.clone());
         storage.set_string("file_dir", self.prefs.file_dir.clone());
         let p = &self.prefs;
         for (key, v) in [

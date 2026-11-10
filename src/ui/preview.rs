@@ -790,8 +790,9 @@ impl App {
                     ui.painter().rect_filled(rect, CornerRadius::ZERO, c);
                 }
             }
-        } else {
-            let text = if st.segments.is_empty() { tr!("Für diese Auswahl gibt es keine Vorschau", "No preview is available for this selection") } else { tr!("Vorschau wird geladen …", "Loading preview …") };
+        } else if st.segments.is_empty() {
+            // Während ein Bild lädt, bleibt die Fläche einfach schwarz (kein Hinweis, der kurz aufblitzt).
+            let text = tr!("Für diese Auswahl gibt es keine Vorschau", "No preview is available for this selection");
             ui.painter().text(
                 screen.center() - Vec2::new(0.0, 14.0),
                 Align2::CENTER_CENTER,

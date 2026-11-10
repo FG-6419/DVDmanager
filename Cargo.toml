@@ -1,6 +1,6 @@
 [package]
 name = "dvdmanager"
-version = "1.0.4"
+version = "1.0.5"
 edition = "2021"
 description = "Verkleinert eigene, ungeschuetzte Video-DVDs auf Rohling-Groesse"
 
@@ -21,7 +21,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_Com", "Win32_Media", "Win32_Media_MediaFoundation", "Win32_Media_Audio", "Win32_Media_Multimedia"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_Com", "Win32_Media", "Win32_Media_MediaFoundation", "Win32_Media_Audio", "Win32_Media_Multimedia", "Win32_System_SystemInformation"] }
 
 [build-dependencies]
 winresource = "0.1"
