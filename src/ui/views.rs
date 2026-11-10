@@ -1216,6 +1216,8 @@ impl App {
                 let v = (marks[k] as i64 + d).clamp(0, total as i64) as u64;
                 marks[k] = v;
                 changed = true;
+                // Vorschau zeigt das Bild an der neuen Stelle der Marke
+                seek = Some(v);
             }
         });
         ui.add_space(4.0);
