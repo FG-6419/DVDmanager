@@ -147,7 +147,10 @@ pub fn apply(ctx: &egui::Context, p: &Pal) {
         v.widgets.noninteractive.fg_stroke = Stroke::new(1.0, pal.text);
         v.widgets.inactive.bg_fill = pal.raised;
         v.widgets.inactive.weak_bg_fill = pal.raised;
-        v.widgets.inactive.bg_stroke = Stroke::NONE;
+        // Rahmen in allen Zuständen gleich stark (im Ruhezustand unsichtbar): egui rechnet
+        // die Stärke in den Innenabstand ein; wechselt sie beim Darüberfahren, ändert sich
+        // die Größe der Knöpfe und die Oberfläche "schwimmt".
+        v.widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::TRANSPARENT);
         v.widgets.inactive.fg_stroke = Stroke::new(1.0, pal.text);
         v.widgets.hovered.bg_fill = pal.hover;
         v.widgets.hovered.weak_bg_fill = pal.hover;
@@ -159,6 +162,7 @@ pub fn apply(ctx: &egui::Context, p: &Pal) {
         v.widgets.active.fg_stroke = Stroke::new(1.0, pal.text);
         v.widgets.open.bg_fill = pal.hover;
         v.widgets.open.weak_bg_fill = pal.hover;
+        v.widgets.open.bg_stroke = Stroke::new(1.0, pal.line);
         v.widgets.open.fg_stroke = Stroke::new(1.0, pal.text);
 
         s.spacing.item_spacing = Vec2::new(8.0, 8.0);
