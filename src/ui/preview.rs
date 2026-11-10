@@ -478,6 +478,12 @@ impl App {
 
     pub(super) fn sync_preview(&mut self) {
         self.update_program();
+        // Bei "Alle Schnitte" ist immer der laufende Eintrag gewählt
+        if self.preview.program && self.plan.mode == discslim::engine::plan::Mode::Reauthor {
+            if let Some(c) = self.preview.prog.get(self.preview.prog_cur) {
+                self.sel = Selection::Entry(c.0);
+            }
+        }
         let want = self.preview_sel();
         if !self.preview.dirty && self.preview.loaded == Some(want) {
             // Kapitelmarken können sich ändern, ohne dass die Vorschau neu lädt.
@@ -537,6 +543,11 @@ impl App {
 
     /// Einmal je Frame: nächstes Bild holen, wenn es Zeit dafür ist.
     pub(super) fn pump_preview(&mut self, ctx: &egui::Context) {
+        // Auswahl geändert (z. B. Klick in der Liste): gleich noch einen Durchlauf, damit
+        // die Vorschau lädt, ohne auf die nächste Mausbewegung zu warten
+        if self.disc.is_some() && (self.preview.dirty || self.preview.loaded != Some(self.preview_sel())) {
+            ctx.request_repaint();
+        }
         let compressed_changed = {
             let opts = self.preview_opts();
             if opts != self.preview.last_opts {
@@ -742,7 +753,7 @@ impl App {
             _ => None,
         };
         if let Some(bus) = self.preview.audio.as_ref() {
-            bus.set_fade(fade_spec);
+            bus.set_fade(fade_spec.filter(|f| f.0.audio));
         }
         let fade_overlay = match (fade_spec, self.preview.current_ms()) {
             (Some((f, a, b)), Some(now)) => f.at(now as f64, a, b),

@@ -477,14 +477,14 @@ impl App {
                 } else {
                     chapters
                 };
+                // Bei "Alle Schnitte" folgt die Auswahl dem laufenden Eintrag (siehe sync_preview)
                 let selected = self.sel == Selection::Entry(i);
-                let playing_here = self.preview.program && self.preview.prog.get(self.preview.prog_cur).map(|c| c.0) == Some(i);
                 let r = self.entry_row(
                     ui,
                     disc,
                     i,
                     &e,
-                    selected || playing_here,
+                    selected,
                     &trf!("{}. Titel {}", "{}. Title {}", i + 1, t.number),
                     &chapters,
                     &fmt_size(size),
@@ -1098,11 +1098,19 @@ impl App {
                     fade.ms = (secs * 1000.0).round() as u32;
                 }
             });
+            style::check(ui, &p, &mut fade.audio, tr!("Ton mit ein- und ausblenden", "Fade the audio as well"));
             ui.label(
-                RichText::new(tr!(
-                    "Die Bilder im Blendenbereich werden neu kodiert, der Ton wird mit ein- und ausgeblendet.",
-                    "Frames within the fade are re-encoded; the audio fades along with the picture."
-                ))
+                RichText::new(if fade.audio {
+                    tr!(
+                        "Die Bilder im Blendenbereich werden neu kodiert, der Ton wird mit ein- und ausgeblendet.",
+                        "Frames within the fade are re-encoded; the audio fades along with the picture."
+                    )
+                } else {
+                    tr!(
+                        "Die Bilder im Blendenbereich werden neu kodiert, der Ton bleibt unverändert.",
+                        "Frames within the fade are re-encoded; the audio stays unchanged."
+                    )
+                })
                 .size(12.5)
                 .color(p.muted),
             );

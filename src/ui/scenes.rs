@@ -239,7 +239,7 @@ impl App {
                                         }
                                     }
                                     if let Some(t) = tex {
-                                        let tint = if on { Color32::WHITE } else { Color32::from_gray(90) };
+                                        let tint = if on { Color32::WHITE } else { Color32::from_gray(170) };
                                         painter.image(t, img, Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), tint);
                                     }
                                     // Auswahl

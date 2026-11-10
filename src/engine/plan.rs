@@ -158,6 +158,9 @@ pub struct Fades {
     pub fade_out: FadeKind,
     /// Dauer jeder Blende in Millisekunden (0 = Standard)
     pub ms: u32,
+    /// Ton mit ein- und ausblenden (sonst läuft er in voller Lautstärke weiter)
+    #[serde(default)]
+    pub audio: bool,
 }
 
 /// Standarddauer einer Blende.

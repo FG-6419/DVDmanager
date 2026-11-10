@@ -233,14 +233,15 @@ fn fades_at_cut_points() {
     let last = disc.titles[ti].chapters.len() - 1;
     let (cut_in, cut_out) = (4_000u64, 20_000u64);
 
-    for exact in [true, false] {
+    // (bildgenau, Ton mitblenden)
+    for (exact, audio) in [(true, true), (false, true), (true, false)] {
         let mut e = ReauthorEntry::new(ti, 0, last, ItemSettings::default());
         e.cut = Cut { start_ms: Some(cut_in), end_ms: Some(cut_out), exact };
-        e.fade = Fades { fade_in: FadeKind::Black, fade_out: FadeKind::White, ms: 1_500 };
+        e.fade = Fades { fade_in: FadeKind::Black, fade_out: FadeKind::White, ms: 1_500, audio };
         let mut plan = Plan::new(NO_TARGET);
         plan.mode = Mode::Reauthor;
         plan.reauthor.push(e);
-        let out = w.join(format!("blende_{exact}"));
+        let out = w.join(format!("blende_{exact}_{audio}"));
         run_backup(open_analysed(&src), plan, Output::Folder(out.clone()));
         let vdir = out.join("VIDEO_TS");
         check_cells(&vdir);
@@ -275,6 +276,11 @@ fn fades_at_cut_points() {
         assert!(first < 30.0, "Anfang nicht schwarz: {first}");
         assert!(quarter > first + 10.0 && quarter < mid, "Einblenden fehlt: {quarter}");
         assert!(end > 200.0, "Ende nicht weiß: {end}");
+        if !audio {
+            // Ton-Blende nicht zugeschaltet: Ton in voller Lautstärke bis zum Rand
+            assert!(a_first > 2_500.0 && a_end > 2_500.0, "Ton geblendet, obwohl abgeschaltet: {a_first} / {a_end}");
+            continue;
+        }
         assert!(a_first < 300.0, "Ton am Anfang nicht still: {a_first}");
         assert!(a_ramp > 600.0 && a_ramp < a_mid * 0.75, "Ton blendet nicht ein: {a_ramp}");
         assert!(a_end < 300.0, "Ton am Ende nicht still: {a_end}");

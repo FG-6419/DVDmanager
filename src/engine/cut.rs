@@ -400,6 +400,7 @@ pub fn entry_stream<'a>(
                 first_kept = false;
                 let dur_out = if rebuilt { vobu_dur_ms(&out) } else { dur };
                 let audio_zone = fades.is_active()
+                    && fades.audio
                     && ((fades.fade_in != FadeKind::None && (t0 as f64) < vis_start + fade_len + AUDIO_MARGIN_MS)
                         || (fades.fade_out != FadeKind::None && (t1 as f64) > vis_end - fade_len - AUDIO_MARGIN_MS));
                 if !audio_zone {

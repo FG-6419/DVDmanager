@@ -829,6 +829,7 @@ impl App {
                         fade_in: discslim::engine::plan::FadeKind::Black,
                         fade_out: discslim::engine::plan::FadeKind::White,
                         ms: 1_500,
+                        audio: false,
                     };
                     self.plan.reauthor.push(e);
                 }
