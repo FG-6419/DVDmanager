@@ -386,6 +386,10 @@ impl PreviewState {
         self.key_t1 = f.key_t1;
         self.frame_ms = f.frame_ms;
         self.has_frame = true;
+        // Das Bild kommt nach dem Zeichnen dieses Durchlaufs an: gleich noch einmal
+        // zeichnen, sonst erscheint es (bei angehaltener Vorschau) erst bei der
+        // nächsten Mausbewegung.
+        ctx.request_repaint();
     }
 }
 
