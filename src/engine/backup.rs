@@ -153,9 +153,9 @@ fn write_with_bup(dir: &Path, name_ifo: &str, data: &[u8]) -> Res<(PathBuf, Path
         d.resize(d.len() + SECTOR - rem, 0);
     }
     let ifo_path = dir.join(name_ifo);
-    std::fs::write(&ifo_path, &d).map_err(|e| format!("{}: {e}", ifo_path.display()))?;
+    crate::dvd::write_output(&ifo_path, &d)?;
     let bup_path = dir.join(format!("{}.BUP", name_ifo.trim_end_matches(".IFO")));
-    std::fs::write(&bup_path, &d).map_err(|e| format!("{}: {e}", bup_path.display()))?;
+    crate::dvd::write_output(&bup_path, &d)?;
     Ok((ifo_path, bup_path))
 }
 

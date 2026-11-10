@@ -133,7 +133,7 @@ impl SpaceWriter {
         self.part_no += 1;
         let name = if self.single { self.base.clone() } else { format!("{}{}.VOB", self.base, self.part_no) };
         let path = self.dir.join(&name);
-        let f = File::create(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let f = crate::dvd::create_output(&path)?;
         self.file = Some(f);
         self.paths.push(path);
         self.part_sizes.push(0);

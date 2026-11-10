@@ -430,7 +430,7 @@ pub fn write_iso(
     let total = data_abs + 1 + 1; // letzter Anker und Endmarke
     let part_len = total - PART - 1;
 
-    let mut out = File::create(out_path).map_err(|e| format!("{}: {e}", out_path.display()))?;
+    let mut out = super::create_output(out_path)?;
     let write_at = |out: &mut File, sector: u32, data: &[u8]| -> Res<()> {
         out.seek(SeekFrom::Start(u64::from(sector) * SECTOR as u64)).map_err(|e| e.to_string())?;
         out.write_all(data).map_err(|e| trf!("ISO schreiben: {e}", "Writing ISO: {e}"))

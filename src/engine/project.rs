@@ -107,7 +107,7 @@ impl Project {
 
     pub fn save(&self, path: &Path) -> Res<()> {
         let text = serde_json::to_string_pretty(self).map_err(|e| trf!("Projekt nicht speicherbar: {e}", "Project cannot be saved: {e}"))?;
-        std::fs::write(path, text).map_err(|e| format!("{}: {e}", path.display()))
+        crate::dvd::write_output(path, text.as_bytes())
     }
 
     pub fn load(path: &Path) -> Res<Project> {
