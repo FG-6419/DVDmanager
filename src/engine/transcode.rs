@@ -689,6 +689,34 @@ impl Retimer {
     }
 }
 
+impl Retimer {
+    /// Abschlusspaket mit der Endzeit der Datei. Viele DVDs tragen Zeitstempel nur am
+    /// Anfang jeder Bildgruppe; ist die letzte groß, steht in den letzten 200 KB keiner,
+    /// und VLC schätzt die Länge dann aus der Datenrate (ergibt Stunden statt Minuten).
+    /// Das Paket enthält nur Füllnullen, Decoder überspringen es.
+    pub fn end_pack(&self) -> Option<Vec<u8>> {
+        let (end, scr) = (self.last_end?, self.last_scr?);
+        let mut s = vec![0u8; SECTOR];
+        s[..4].copy_from_slice(&[0, 0, 1, 0xBA]);
+        put_scr(&mut s, (scr.max(0) as u64 + 1) * 300);
+        s[10..13].copy_from_slice(&[0x01, 0x89, 0xC3]); // 10,08 Mbit/s wie auf der DVD
+        s[13] = 0xF8;
+        // Bild-PES: Kopf mit PTS, vier Füllnullen
+        s[14..18].copy_from_slice(&[0, 0, 1, 0xE0]);
+        put16(&mut s, 18, 3 + 5 + 4);
+        s[20] = 0x81;
+        s[21] = 0x80;
+        s[22] = 5;
+        write_ts(&mut s[23..], 2, end.rem_euclid(TS_WRAP) as u64);
+        // Rest: Füllpaket
+        let pad = 32;
+        s[pad..pad + 4].copy_from_slice(&[0, 0, 1, 0xBE]);
+        put16(&mut s, pad + 4, (SECTOR - pad - 6) as u16);
+        s[pad + 6..].fill(0xFF);
+        Some(s)
+    }
+}
+
 const TS_WRAP: i64 = 1 << 33;
 
 /// Kleinster PTS/DTS aller Bild- und Tonpakete einer VOBU.

@@ -693,6 +693,9 @@ fn run_vob(disc: &Disc, plan: &Plan, path: &Path, ctx: &mut Ctx, mpeg: Option<Op
             Ok(())
         })?;        maps.push(map);
     }
+    if let Some(end) = retimer.end_pack() {
+        writer.write(&end)?;
+    }
     writer.finish()?;
     if new_pos == 0 {
         return Err(tr!("Die gewählten Titel enthalten keine lesbaren Videodaten.", "The chosen titles contain no readable video data.").into());

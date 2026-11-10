@@ -441,6 +441,13 @@ fn mpeg_timestamps_continuous() {
         assert!(min_any + 90_000 > first, "{name}: Ton liegt weit vor dem ersten Bild ({min_any} < {first})");
         assert_eq!(scr_back, 0, "{name}: Systemuhr läuft rückwärts");
         assert!(tail_ms.abs_diff(total) < 1_500, "{name}: Länge am Dateiende {tail_ms} statt {total} ms");
+        // VLC sucht das Ende nur in den letzten 200 000 Bytes; das Abschlusspaket trägt die Endzeit.
+        let data = std::fs::read(&out).unwrap();
+        let last = &data[data.len() - SECTOR..];
+        let h = pack_header_len(last);
+        assert_eq!(last[h + 3], 0xE0, "{name}: kein Abschlusspaket");
+        let end_ms = (read_ts(&last[h + 9..]) - first) / 90;
+        assert!(end_ms.abs_diff(total) < 1_500, "{name}: Endzeit {end_ms} statt {total} ms");
     }
 }
 
