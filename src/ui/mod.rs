@@ -852,6 +852,11 @@ impl App {
                     dlg.wait_for_result();
                 }
             }
+            ("scenes", 30) => {
+                if let Some(dlg) = self.scene_dlg.as_mut() {
+                    dlg.deselect(1);
+                }
+            }
             ("split", 5) => {
                 // Titel 1 nach Kapiteln zerlegen und ohne Größengrenze anzeigen
                 if let Some(d) = self.disc.clone() {
