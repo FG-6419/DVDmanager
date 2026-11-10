@@ -866,6 +866,17 @@ impl App {
                 self.preview.dirty = true;
             }
             ("cutview", 60) => self.preview.cut_view = true,
+            ("fadeall", 5) => {
+                // Zwei Einträge; der erste hat eine Blende, die auf den zweiten übertragen wird
+                self.dev_state = Some("fade".into());
+                self.apply_dev_state(ctx);
+                if let Some(d) = self.disc.clone() {
+                    let t = &d.titles[1.min(d.titles.len() - 1)];
+                    let e = discslim::engine::plan::ReauthorEntry::new(1.min(d.titles.len() - 1), 0, t.chapters.len().saturating_sub(1), Default::default());
+                    self.plan.reauthor.push(e);
+                }
+                self.dev_state = Some("fadeall".into());
+            }
             ("fade", 5) => {
                 // Schnitt mit Blenden; die Vorschau steht mitten im Einblenden
                 self.plan.mode = Mode::Reauthor;

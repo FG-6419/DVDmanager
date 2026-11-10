@@ -1125,6 +1125,27 @@ impl App {
                 .color(p.muted),
             );
         }
+        // Dieselbe Blende für alle Einträge (z. B. alle Szenen nach der Szenenerkennung)
+        let others = self.plan.reauthor.len().saturating_sub(1);
+        if others > 0 {
+            let r = ui
+                .add_enabled(others > 0, egui::Button::new(RichText::new(trf!("{}  Auf alle Einträge übertragen", "{}  Apply to all entries", ic::COPY)).size(13.0)))
+                .on_hover_text(trf!(
+                    "Übernimmt diese Blende für die {others} anderen Einträge. Blenden wirken nur bei bildgenauem Schnitt, das wird dort mit eingeschaltet.",
+                    "Applies this fade to the {others} other entries. Fades only work with frame-accurate cutting, which is switched on there as well."
+                ));
+            if r.clicked() {
+                let fade = self.plan.reauthor[i].fade.clone();
+                for (k, e) in self.plan.reauthor.iter_mut().enumerate() {
+                    if k != i {
+                        e.fade = fade.clone();
+                        e.cut.exact = true;
+                    }
+                }
+                self.preview.dirty = true;
+                self.notice = Some((trf!("Blende auf {others} weitere Einträge übertragen", "Fade applied to {others} more entries"), std::time::Instant::now()));
+            }
+        }
         ui.add_space(4.0);
     }
 
