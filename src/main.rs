@@ -36,7 +36,7 @@ fn main() -> eframe::Result {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("DVDmanager")
+            .with_title(format!("DVDmanager {}", discslim::version::version()))
             .with_inner_size([1320.0, 820.0])
             .with_min_inner_size([1040.0, 660.0])
             .with_drag_and_drop(true)

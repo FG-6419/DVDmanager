@@ -802,10 +802,11 @@ impl App {
         }
         let p = self.pal;
         let mut close = false;
-        modal(ctx, &p, "ueber", 480.0, |ui| {
+        modal(ctx, &p, "ueber", 520.0, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(ic::DISC).size(30.0).color(p.accent));
                 ui.label(RichText::new("DVDmanager").family(semibold()).size(20.0));
+                ui.label(RichText::new(trf!("Version {}", "Version {}", discslim::version::version())).size(13.0).color(p.muted));
             });
             ui.add_space(4.0);
             ui.label(
@@ -818,6 +819,27 @@ impl App {
             ui.label(
                 RichText::new(tr!("Kopiergeschützte DVDs (CSS) werden erkannt und nicht verarbeitet.", "Copy-protected DVDs (CSS) are detected and not processed.")).size(13.0).color(p.faint),
             );
+            ui.add_space(12.0);
+            style::section(ui, &p, ic::CLOCK_COUNTER_CLOCKWISE, tr!("ÄNDERUNGEN", "CHANGES"));
+            egui::ScrollArea::vertical().id_salt("aenderungen").max_height(300.0).auto_shrink([false, true]).show(ui, |ui| {
+                for r in discslim::version::releases() {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(&r.version).family(semibold()).size(14.0));
+                        ui.label(RichText::new(&r.date).size(12.5).color(p.faint));
+                    });
+                    for line in &r.intro {
+                        ui.label(RichText::new(line).size(13.0).color(p.muted));
+                    }
+                    for item in &r.items {
+                        ui.horizontal_top(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            ui.label(RichText::new("•").size(13.0).color(p.accent));
+                            ui.add(egui::Label::new(RichText::new(item).size(13.0)).wrap());
+                        });
+                    }
+                    ui.add_space(8.0);
+                }
+            });
             ui.add_space(10.0);
             ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
                 if primary_button(ui, &p, tr!("Schließen", "Close"), true).clicked() {

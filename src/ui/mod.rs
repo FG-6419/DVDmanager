@@ -804,6 +804,7 @@ impl App {
         let Some(state) = self.dev_state.clone() else { return };
         match (state.as_str(), self.frames) {
             ("backup", 5) => self.open_backup_dialog(),
+            ("about", 5) => self.about_open = true,
             ("cut" | "cutview", 5) => {
                 self.plan.mode = discslim::engine::plan::Mode::Reauthor;
                 if let Some(d) = self.disc.clone() {

@@ -9,3 +9,4 @@ pub mod demo;
 pub mod dvd;
 pub mod engine;
 pub mod mpeg2;
+pub mod version;

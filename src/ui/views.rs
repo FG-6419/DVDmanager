@@ -76,6 +76,16 @@ impl App {
                     ui.spacing_mut().item_spacing.x = 8.0;
                     let logo = ui.add(egui::Label::new(RichText::new(ic::DISC).size(25.0).color(p.accent)).sense(Sense::click()));
                     let name = ui.add(egui::Label::new(RichText::new("DVDmanager").family(semibold()).size(17.0).color(p.text)).sense(Sense::click()));
+                    // Versionsnummer; ein Klick zeigt die Änderungen
+                    let ver = ui
+                        .add(egui::Label::new(RichText::new(discslim::version::version()).size(12.0).color(p.faint)).sense(Sense::click()))
+                        .on_hover_text(tr!("Version – Klick zeigt die Änderungen", "Version – click to see the changes"));
+                    if ver.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                    if ver.clicked() {
+                        self.about_open = true;
+                    }
                     let back = logo.clicked() || name.clicked();
                     if (logo.hovered() || name.hovered()) && self.disc.is_some() && self.job.is_none() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
