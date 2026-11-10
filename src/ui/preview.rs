@@ -734,7 +734,7 @@ impl App {
 
         // Blende des gezeigten Eintrags als Überlagerung, so wie sie ausgegeben wird
         let fade_spec = match (self.preview_sel(), self.disc.as_ref()) {
-            (Selection::Entry(i), Some(disc)) => self.plan.reauthor.get(i).filter(|e| e.fade.is_active()).map(|e| {
+            (Selection::Entry(i), Some(disc)) => self.plan.reauthor.get(i).filter(|e| e.active_fade().is_active()).map(|e| {
                 let total = discslim::engine::plan::entry_duration_ms(disc, e);
                 let (a, b) = e.cut.effective(total);
                 (e.fade, a as f64, b.min(total) as f64)

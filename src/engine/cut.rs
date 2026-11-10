@@ -314,7 +314,7 @@ pub fn entry_stream<'a>(
     let (cut_in, cut_out) = entry.cut.effective(crate::engine::plan::entry_duration_ms(disc, entry));
     let exact = entry.cut.exact;
     // Sichtbarer Bereich und Länge der Blenden (Zeitachse des Eintrags)
-    let fades = entry.fade;
+    let fades = entry.active_fade();
     let total_ms = crate::engine::plan::entry_duration_ms(disc, entry);
     let vis_start = cut_in as f64;
     let vis_end = cut_out.min(total_ms) as f64;

@@ -200,6 +200,16 @@ impl ReauthorEntry {
         Self { title, first_chapter, last_chapter, settings, cut: Cut::default(), chapter_marks: None, fade: Fades::default() }
     }
 
+    /// Wirksame Blenden: nur bei bildgenauem Schnitt. Ohne ihn wird an Bildgruppen
+    /// geschnitten und nichts neu kodiert; eingestellte Werte bleiben aber erhalten.
+    pub fn active_fade(&self) -> Fades {
+        if self.cut.exact {
+            self.fade
+        } else {
+            Fades::default()
+        }
+    }
+
     /// Kapitelanfänge der DVD im gewählten Bereich (ohne das erste Kapitel), auf der
     /// Zeitachse des Eintrags.
     pub fn original_marks(&self, disc: &Disc) -> Vec<u64> {

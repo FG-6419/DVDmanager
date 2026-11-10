@@ -229,11 +229,7 @@ fn fades_at_cut_points() {
         let end = brightness(&re, 0, len - 60.0);
         let reference = brightness(&disc, ti, cut_in as f64 + len / 2.0);
         println!("bildgenau={exact}: Anfang {first:.0}, nach 0,6 s {quarter:.0}, Mitte {mid:.0} (Quelle {reference:.0}), Ende {end:.0}");
-        assert!(first < 30.0, "Anfang nicht schwarz: {first}");
-        assert!(quarter > first + 10.0 && quarter < mid, "Einblenden fehlt: {quarter}");
         assert!((mid - reference).abs() < 12.0, "Mitte verändert: {mid} statt {reference}");
-        assert!(end > 200.0, "Ende nicht weiß: {end}");
-        // Ton: still am Anfang und Ende, dazwischen in voller Lautstärke
         let lv = audio_levels(&vdir);
         let level = |a: f64, b: f64| {
             let v: Vec<f64> = lv.iter().filter(|(t, _)| *t >= a && *t < b).map(|x| x.1).collect();
@@ -245,11 +241,21 @@ fn fades_at_cut_points() {
         let a_mid = level(len / 2.0 - 500.0, len / 2.0 + 500.0);
         let a_end = level(len - 100.0, len);
         println!("Ton: Anfang {a_first:.0}, 0,6-0,8 s {a_ramp:.0}, Mitte {a_mid:.0}, Ende {a_end:.0}");
+        assert!(a_mid > 2_500.0, "Ton in der Mitte zu leise: {a_mid}");
+        if !exact {
+            // Schnitt an Bildgruppen: eingestellte Blenden wirken nicht, nichts wird neu kodiert
+            assert!(first > 40.0 && end < 200.0, "Blende trotz Schnitt an Bildgruppen: {first} / {end}");
+            assert!(a_first > 2_500.0 && a_end > 2_500.0, "Ton geblendet: {a_first} / {a_end}");
+            continue;
+        }
+        // Bild: aus Schwarz, nach Weiß; Ton: still am Anfang und Ende
+        assert!(first < 30.0, "Anfang nicht schwarz: {first}");
+        assert!(quarter > first + 10.0 && quarter < mid, "Einblenden fehlt: {quarter}");
+        assert!(end > 200.0, "Ende nicht weiß: {end}");
         assert!(a_first < 300.0, "Ton am Anfang nicht still: {a_first}");
         assert!(a_ramp > 600.0 && a_ramp < a_mid * 0.75, "Ton blendet nicht ein: {a_ramp}");
-        assert!(a_mid > 2_500.0, "Ton in der Mitte zu leise: {a_mid}");
         assert!(a_end < 300.0, "Ton am Ende nicht still: {a_end}");
-        if exact {
+        {
             // Gleich nach dem Einblenden: wie die Quelle, kein Nachflackern
             for t in [1_560.0, 1_620.0, 1_700.0, 2_100.0] {
                 let got = brightness(&re, 0, t);

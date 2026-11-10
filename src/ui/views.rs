@@ -1046,7 +1046,10 @@ impl App {
         }
         let _ = changed;
         ui.add_space(4.0);
-        self.view_fades(ui, i);
+        // Blenden brauchen Neukodierung, deshalb nur beim bildgenauen Schnitt
+        if cut.exact {
+            self.view_fades(ui, i);
+        }
     }
 
     /// Blenden am Anfang und Ende eines Eintrags: keine, aus/nach Schwarz oder Weiß.
