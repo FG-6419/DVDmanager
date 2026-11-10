@@ -651,8 +651,13 @@ impl Retimer {
         // Erste VOBU: Zeitachse bei null beginnen lassen. Die Originalzeiten können
         // beliebig groß sein (spätere Stelle im Film, manche DVDs starten ihre Uhr hoch);
         // nahe am Überlauf der 33-Bit-Uhr liefe die Datei sonst rückwärts.
+        // Am Kapitelanfang mitten im Film liegt der Ton oft vor dem ersten Bild (er wird
+        // später gemultiplext als das Bild); der früheste Zeitstempel bestimmt den Anfang,
+        // sonst fiele der Ton unter null und liefe über.
         if self.last_scr.is_none() && self.last_end.is_none() {
-            let by_pts = if has_ptm { START_PTS - s_ptm } else { -first_scr };
+            // Mehr als 5 s Vorlauf wäre ein Überlauf der Quelluhr, kein echter Vorlauf.
+            let earliest = min_ts(data).filter(|m| s_ptm - m < 450_000).map_or(s_ptm, |m| m.min(s_ptm));
+            let by_pts = if has_ptm { START_PTS - earliest } else { -first_scr };
             // Die Systemuhr darf nicht unter null fallen
             self.offset = by_pts.max(-first_scr);
         }
@@ -685,6 +690,34 @@ impl Retimer {
 }
 
 const TS_WRAP: i64 = 1 << 33;
+
+/// Kleinster PTS/DTS aller Bild- und Tonpakete einer VOBU.
+fn min_ts(data: &[u8]) -> Option<i64> {
+    let mut min: Option<i64> = None;
+    for s in data.chunks_exact(SECTOR) {
+        if !is_pack(s) || is_nav(s) {
+            continue;
+        }
+        let h = pack_header_len(s);
+        if h + 9 > s.len() || !matches!(s[h + 3], 0xE0 | 0xBD | 0xC0..=0xC7) {
+            continue;
+        }
+        let flags = s[h + 7] >> 6;
+        let mut take = |at: usize| {
+            if at + 5 <= s.len() {
+                let v = read_ts(&s[at..]) as i64;
+                min = Some(min.map_or(v, |m| m.min(v)));
+            }
+        };
+        if flags >= 2 {
+            take(h + 9);
+        }
+        if flags == 3 {
+            take(h + 14);
+        }
+    }
+    min
+}
 
 fn shift_ts(s: &mut [u8], at: usize, offset: i64) {
     let prefix = s[at] >> 4;
@@ -737,4 +770,55 @@ pub fn copy_raw(reader: &mut SpaceReader, writer: &mut SpaceWriter) -> Res<()> {
         pos += n as u64;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Leeres Paket mit Systemuhr.
+    fn pack(scr: u64) -> Vec<u8> {
+        let mut s = vec![0u8; SECTOR];
+        s[..4].copy_from_slice(&[0, 0, 1, 0xBA]);
+        s[13] = 0xF8;
+        put_scr(&mut s, scr * 300);
+        s
+    }
+
+    /// Paket eines Elementarstroms mit PTS.
+    fn pes(scr: u64, id: u8, pts: u64) -> Vec<u8> {
+        let mut s = pack(scr);
+        s[14..18].copy_from_slice(&[0, 0, 1, id]);
+        put16(&mut s, 18, (SECTOR - 20) as u16);
+        s[20] = 0x81;
+        s[21] = 0x80;
+        s[22] = 5;
+        write_ts(&mut s[23..], 2, pts);
+        s
+    }
+
+    fn nav(scr: u64, s_ptm: u32, e_ptm: u32) -> Vec<u8> {
+        let mut s = pack(scr);
+        s[14..18].copy_from_slice(&[0, 0, 1, 0xBB]);
+        s[0x26..0x2A].copy_from_slice(&[0, 0, 1, 0xBF]);
+        s[0x400..0x404].copy_from_slice(&[0, 0, 1, 0xBF]);
+        put32(&mut s, PCI_OFF + 12, s_ptm);
+        put32(&mut s, PCI_OFF + 16, e_ptm);
+        s
+    }
+
+    #[test]
+    fn retimer_keeps_leading_audio_above_zero() {
+        // Kapitel mitten im Film: der Ton beginnt 0,8 s vor dem ersten Bild.
+        let s_ptm = 5_000_000u64;
+        let mut v = nav(s_ptm - 80_000, s_ptm as u32, s_ptm as u32 + 45_000);
+        v.extend(pes(s_ptm - 79_000, 0xE0, s_ptm));
+        v.extend(pes(s_ptm - 78_000, 0xC0, s_ptm - 72_000));
+        let mut r = Retimer::default();
+        r.apply(&mut v);
+        let ts = |k: usize| read_ts(&v[k * SECTOR + 23..]);
+        let (video, audio) = (ts(1), ts(2));
+        assert!(audio < video && audio > 0 && video < 90_000 * 2, "Bild {video}, Ton {audio}");
+        assert_eq!(video - audio, 72_000);
+    }
 }

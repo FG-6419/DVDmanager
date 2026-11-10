@@ -397,11 +397,18 @@ fn mpeg_timestamps_continuous() {
         e.cut = Cut { start_ms: Some(a), end_ms: Some(b), exact };
         e
     };
+    // Wie „In Einzeltitel zerlegen“: ein Kapitel je Eintrag, ohne Schnitt
+    let chapter = |t: usize, c: usize| {
+        let mut e = ReauthorEntry::new(t, c, c, ItemSettings::default());
+        e.cut = Cut::whole(entry_duration_ms(&disc, &e), false);
+        e
+    };
     let cases: Vec<(&str, Vec<ReauthorEntry>)> = vec![
         ("drei Titel", vec![whole(0), whole(1), whole(2)]),
         ("Titel rückwärts", vec![whole(2), whole(1), whole(0)]),
         ("Ausschnitte", vec![part(0, 40_000, 50_000, false), part(0, 5_000, 15_000, true), part(1, 3_000, 9_000, false)]),
         ("später Anfang", vec![part(0, 30_000, 60_000, false), whole(2)]),
+        ("Einzelkapitel", vec![chapter(0, 2), chapter(0, 1)]),
     ];
     for (name, entries) in cases {
         let total: u64 = entries
@@ -431,6 +438,7 @@ fn mpeg_timestamps_continuous() {
         );
         assert!(max_any < 90_000 * 3600 * 4, "{name}: Zeitstempel übergelaufen ({max_any})");
         assert!(first < 90_000 * 10, "{name}: Datei beginnt nicht bei null ({first})");
+        assert!(min_any + 90_000 > first, "{name}: Ton liegt weit vor dem ersten Bild ({min_any} < {first})");
         assert_eq!(scr_back, 0, "{name}: Systemuhr läuft rückwärts");
         assert!(tail_ms.abs_diff(total) < 1_500, "{name}: Länge am Dateiende {tail_ms} statt {total} ms");
     }

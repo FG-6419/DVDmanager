@@ -2,6 +2,10 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.003 · 2026-11-10 13:37
+
+- Falsche oder negative Gesamtlänge in VLC bei einzelnen Kapiteln (z. B. nach „In Einzeltitel zerlegen“) behoben: Beginnt ein Kapitel mitten im Film, liegt sein Ton etwas vor dem ersten Bild. Dieser Ton rutschte bisher unter 0:00 und ließ die Uhr der Datei überlaufen.
+
 ## 1.0.002 · 2026-11-10 11:54
 
 - MPEG- und VOB-Datei beginnen jetzt immer bei 0:00. Bisher blieb die Uhrzeit der DVD erhalten; bei manchen DVDs lief sie dadurch über, und Player wie VLC zeigten eine falsche oder negative Gesamtlänge.
