@@ -360,6 +360,82 @@ fn scene_detection_splits_title() {
     }
 }
 
+/// Zeitstempel einer MPEG-Datei: (SCR je Paket, PTS je Paket mit Stream-ID), in 90 kHz.
+fn mpeg_times(path: &Path) -> (Vec<u64>, Vec<(u8, u64)>) {
+    let data = std::fs::read(path).unwrap();
+    let mut scr = Vec::new();
+    let mut pts = Vec::new();
+    for s in data.chunks_exact(SECTOR) {
+        if !is_pack(s) {
+            continue;
+        }
+        scr.push(get_scr(s) / 300);
+        let h = pack_header_len(s);
+        if h + 14 > s.len() || s[h] != 0 || s[h + 1] != 0 || s[h + 2] != 1 {
+            continue;
+        }
+        let id = s[h + 3];
+        if matches!(id, 0xE0 | 0xBD | 0xC0..=0xC7) && s[h + 7] & 0x80 != 0 {
+            pts.push((id, read_ts(&s[h + 9..])));
+        }
+    }
+    (scr, pts)
+}
+
+#[test]
+fn mpeg_timestamps_continuous() {
+    let w = work("mpeg_zeit");
+    let src = demo::build_sample(&w, |_| {}).unwrap();
+    let disc = open_analysed(&src);
+    let whole = |t: usize| {
+        let mut e = ReauthorEntry::new(t, 0, disc.titles[t].chapters.len() - 1, ItemSettings::default());
+        e.cut = Cut::whole(entry_duration_ms(&disc, &e), false);
+        e
+    };
+    let part = |t: usize, a: u64, b: u64, exact: bool| {
+        let mut e = whole(t);
+        e.cut = Cut { start_ms: Some(a), end_ms: Some(b), exact };
+        e
+    };
+    let cases: Vec<(&str, Vec<ReauthorEntry>)> = vec![
+        ("drei Titel", vec![whole(0), whole(1), whole(2)]),
+        ("Titel rückwärts", vec![whole(2), whole(1), whole(0)]),
+        ("Ausschnitte", vec![part(0, 40_000, 50_000, false), part(0, 5_000, 15_000, true), part(1, 3_000, 9_000, false)]),
+        ("später Anfang", vec![part(0, 30_000, 60_000, false), whole(2)]),
+    ];
+    for (name, entries) in cases {
+        let total: u64 = entries
+            .iter()
+            .map(|e| {
+                let t = entry_duration_ms(&disc, e);
+                let (a, b) = e.cut.effective(t);
+                b.min(t) - a
+            })
+            .sum();
+        let mut plan = Plan::new(NO_TARGET);
+        plan.mode = Mode::Reauthor;
+        plan.reauthor = entries;
+        let out = w.join(format!("{name}.mpg"));
+        run_backup(open_analysed(&src), plan, Output::Mpeg { path: out.clone(), audio: None });
+        let (scr, pts) = mpeg_times(&out);
+        let video: Vec<u64> = pts.iter().filter(|p| p.0 == 0xE0).map(|p| p.1).collect();
+        let (first, last) = (video[0], *video.iter().max().unwrap());
+        let span_ms = (last - first) / 90;
+        let max_any = pts.iter().map(|p| p.1).max().unwrap();
+        let min_any = pts.iter().map(|p| p.1).min().unwrap();
+        // Was ein Player am Anfang und am Ende der Datei findet
+        let tail_ms = video[video.len().saturating_sub(5)..].iter().max().unwrap().saturating_sub(first) / 90;
+        let scr_back = scr.windows(2).filter(|w| w[1] < w[0]).count();
+        println!(
+            "{name}: Soll {total} ms, Video {first}..{last} ({span_ms} ms, Ende {tail_ms} ms), alle PTS {min_any}..{max_any}, SCR rückwärts {scr_back}x"
+        );
+        assert!(max_any < 90_000 * 3600 * 4, "{name}: Zeitstempel übergelaufen ({max_any})");
+        assert!(first < 90_000 * 10, "{name}: Datei beginnt nicht bei null ({first})");
+        assert_eq!(scr_back, 0, "{name}: Systemuhr läuft rückwärts");
+        assert!(tail_ms.abs_diff(total) < 1_500, "{name}: Länge am Dateiende {tail_ms} statt {total} ms");
+    }
+}
+
 #[test]
 fn project_file_round_trip() {
     let w = work("projekt");

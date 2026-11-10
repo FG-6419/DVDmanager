@@ -628,6 +628,9 @@ pub fn patch_nav(s: &mut [u8], vobu: (u32, u32, u32, u32), map: &SectorMap, remo
 /// Macht die Zeitstempel fortlaufend, wenn mehrere Abschnitte in einer Datei landen.
 /// Auf der DVD beginnt jeder Abschnitt seine Uhr neu; in einer einzelnen Datei würden
 /// solche Sprünge Dauer und Vorspulen im Player durcheinanderbringen.
+/// Die Datei beginnt so, dass das erste Bild nach einer halben Sekunde erscheint.
+const START_PTS: i64 = 45_000;
+
 #[derive(Default)]
 pub struct Retimer {
     offset: i64,
@@ -644,6 +647,15 @@ impl Retimer {
         let (s_ptm, e_ptm) = (i64::from(be32(data, PCI_OFF + 12)), i64::from(be32(data, PCI_OFF + 16)));
         let first_scr = (get_scr(data) / 300) as i64;
         let has_ptm = s_ptm != 0 || e_ptm != 0;
+
+        // Erste VOBU: Zeitachse bei null beginnen lassen. Die Originalzeiten können
+        // beliebig groß sein (spätere Stelle im Film, manche DVDs starten ihre Uhr hoch);
+        // nahe am Überlauf der 33-Bit-Uhr liefe die Datei sonst rückwärts.
+        if self.last_scr.is_none() && self.last_end.is_none() {
+            let by_pts = if has_ptm { START_PTS - s_ptm } else { -first_scr };
+            // Die Systemuhr darf nicht unter null fallen
+            self.offset = by_pts.max(-first_scr);
+        }
 
         let scr_back = self.last_scr.is_some_and(|l| first_scr + self.offset <= l);
         let pts_jump = has_ptm && self.last_end.is_some_and(|e| (s_ptm + self.offset - e).abs() > 45_000);
