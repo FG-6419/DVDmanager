@@ -2,6 +2,12 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.013 · 2026-11-11 17:01
+
+- Blockartefakte an bildgenauen Schnitten behoben: Die neu kodierten Bilder einer angeschnittenen Bildgruppe bekamen nur ihren Anteil am Original. Blieb ein einziges Bild übrig, musste es als I-Bild mit einem Zwölftel auskommen und wurde grob (Quantisierer bis 19). Jetzt bekommt das erste Bild so viel wie das I-Bild im Original, begrenzt durch die DVD-Datenrate; in den Tests liegt der Quantisierer überall bei 2 bis 5.
+- Zeitsprünge an Schnittstellen in MPEG- und VOB-Dateien behoben: Ließ ein angeschnittener Block der Systemuhr wenig Spielraum, wurde der ganze nächste Eintrag um bis zu 0,2 s verschoben. Jetzt rückt nur die Systemuhr weiter. Außerdem werden Abstände ab 30 ms zwischen zwei Szenen ausgeglichen (bisher erst ab 0,5 s), sonst entstand eine kurze Pause in Bild und Ton.
+- „Von ursprünglich …“ im Abschlussfenster zählt beim Neu-Zusammenstellen nur die geschnittenen Teile, nicht für jeden Eintrag den ganzen Film.
+
 ## 1.0.012 · 2026-11-11 11:24
 
 - Einzelne VOB- und MPEG-Dateien öffnen: neue Karte „VOB-/MPEG-Datei“ im Startbild (auch per Ziehen und Ablegen und in der Warteschlange). Die Datei wird ohne Neukodierung in eine DVD-Struktur umgepackt; danach gehen Vorschau, Schnitt, Szenenerkennung, Blenden und alle Ausgabearten wie bei einer DVD. „Ganze DVD“ entfällt dabei, der Film steht gleich in der Liste.

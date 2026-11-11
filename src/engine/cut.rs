@@ -109,6 +109,34 @@ pub fn apply_fade(f: &mut crate::mpeg2::decode::DecodedFrame, a: f32, kind: Fade
     }
 }
 
+/// Bytes für die neu kodierten Bilder einer angeschnittenen Bildgruppe.
+///
+/// Das erste neue Bild ist immer ein I-Bild und braucht so viel wie das I-Bild der
+/// Gruppe im Original; die übrigen sind Differenzbilder ohne Bewegungsausgleich und
+/// bekommen das Anderthalbfache ihres Anteils. Bisher galt nur der Anteil an der Gruppe:
+/// Blieb ein einziges Bild übrig, bekam dieses I-Bild ein Zwölftel und wurde blockig.
+/// Obergrenze ist, was die DVD-Datenrate in dieser Zeit zulässt (plus Puffer).
+fn reencode_budget(es: &[u8], kept: usize, total: usize, frame_ms: f64) -> usize {
+    let mut pics = Vec::new();
+    let mut i = 0;
+    while let Some(p) = next_start_code(es, i) {
+        if p + 3 < es.len() && es[p + 3] == 0x00 {
+            pics.push(p);
+        }
+        i = p + 4;
+    }
+    let i_size = match (pics.first(), pics.get(1)) {
+        (Some(a), Some(b)) => b - a,
+        _ => es.len() / total.max(1),
+    };
+    let rest_avg = es.len().saturating_sub(i_size) as f64 / total.saturating_sub(1).max(1) as f64;
+    let wanted = i_size as f64 + kept.saturating_sub(1) as f64 * rest_avg * 1.5;
+    let proportional = es.len() as f64 * kept as f64 / total.max(1) as f64;
+    // 9 MBit/s für die Dauer der Bilder, dazu der halbe Bildpuffer (224 KB)
+    let cap = kept as f64 * frame_ms / 1000.0 * 9_000_000.0 / 8.0 + 112_000.0;
+    (wanted.max(proportional).min(cap.max(proportional)) as usize).max(kept * 6_000)
+}
+
 /// Wie `rebuild_vobu`, dazu auf Wunsch eine Blende je Bild.
 pub fn rebuild_vobu_with(
     prev: Option<&[u8]>,
@@ -146,7 +174,7 @@ pub fn rebuild_vobu_with(
         return Ok(None);
     }
     let seq = dec.seq.clone();
-    let budget = ((es.len() as f64 * kept.len() as f64 / total as f64) as usize).max(kept.len() * 6_000);
+    let budget = reencode_budget(&es, kept.len(), total, frame_ms);
     // Blende: nur die betroffenen Bilder werden kopiert und verändert
     let faded: Vec<Option<crate::mpeg2::decode::DecodedFrame>> = kept
         .iter()

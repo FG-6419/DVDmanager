@@ -542,6 +542,22 @@ fn real_media_file() {
     assert!(s.check.unwrap().is_clean());
 }
 
+/// Echtes Projekt ausspielen: DVDMANAGER_REAL_PROJECT=Pfad cargo test real_project -- --ignored --nocapture
+#[test]
+#[ignore]
+fn real_project_backup() {
+    let Ok(path) = std::env::var("DVDMANAGER_REAL_PROJECT") else { return };
+    let proj = Project::load(Path::new(&path)).unwrap();
+    let source = discslim::engine::import::open_source(&proj.source, &mut |_, _| true).unwrap();
+    let mut disc = Disc::open(source).unwrap();
+    disc.analyse(true, &mut |_, _| true).unwrap();
+    let plan = proj.plan_for(&disc).unwrap();
+    let w = work("echtes_projekt");
+    let out = w.join("projekt.mpg");
+    let s = run_backup(disc, plan, Output::Mpeg { path: out.clone(), audio: None });
+    println!("{} Sektoren von ursprünglich {:.0}, Prüfung: {:?}", s.sectors, s.source_sectors, s.check);
+}
+
 #[test]
 fn output_check_and_overview_picture() {
     let w = work("pruefung_bild");

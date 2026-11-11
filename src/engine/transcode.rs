@@ -663,21 +663,31 @@ impl Retimer {
         }
 
         let scr_back = self.last_scr.is_some_and(|l| first_scr + self.offset <= l);
-        let pts_jump = has_ptm && self.last_end.is_some_and(|e| (s_ptm + self.offset - e).abs() > 45_000);
-        if scr_back || pts_jump {
-            let by_pts = if has_ptm { self.last_end.map(|e| e - s_ptm) } else { None };
-            let by_scr = self.last_scr.map(|l| l + 1 - first_scr);
-            self.offset = match (by_pts, by_scr) {
-                (Some(a), Some(b)) => a.max(b),
-                (Some(a), None) => a,
-                (None, Some(b)) => b,
-                (None, None) => self.offset,
-            };
+        // Schon ab gut einem halben Bild: Zwei Szenen mit kleinem Abstand in der Quelle
+        // ergäben sonst eine kurze Pause in Bild und Ton.
+        let pts_jump = has_ptm && self.last_end.is_some_and(|e| (s_ptm + self.offset - e).abs() > 2_700);
+        if pts_jump {
+            if let Some(e) = self.last_end {
+                self.offset = e - s_ptm;
+            }
+        } else if scr_back && !has_ptm {
+            if let Some(l) = self.last_scr {
+                self.offset = l + 1 - first_scr;
+            }
+        }
+        // Läuft die Systemuhr sonst rückwärts (angeschnittener Block mit wenig Spielraum),
+        // rückt nur sie weiter. Bild und Ton bleiben lückenlos; bisher wurde der ganze
+        // nächste Eintrag verschoben, und im Ton entstand eine Lücke von bis zu 0,2 s.
+        let mut scr_extra = self.last_scr.map_or(0, |l| (l + 1 - (first_scr + self.offset)).max(0));
+        if scr_extra > 63_000 {
+            // Mehr als 0,7 s: dann lieber alles verschieben, sonst käme das Bild zu spät an.
+            self.offset += scr_extra;
+            scr_extra = 0;
         }
 
-        if self.offset != 0 {
+        if self.offset != 0 || scr_extra != 0 {
             for s in data.chunks_exact_mut(SECTOR) {
-                shift_pack(s, self.offset);
+                shift_pack(s, self.offset, self.offset + scr_extra);
             }
         }
         if has_ptm {
@@ -753,12 +763,13 @@ fn shift_ts(s: &mut [u8], at: usize, offset: i64) {
     write_ts(&mut s[at..], prefix, ts as u64);
 }
 
-/// Verschiebt alle Zeitangaben eines Pakets um offset (in 90-kHz-Einheiten).
-fn shift_pack(s: &mut [u8], offset: i64) {
+/// Verschiebt die Zeitstempel eines Pakets um `offset`, die Systemuhr um `scr_offset`
+/// (beides in 90-kHz-Einheiten).
+fn shift_pack(s: &mut [u8], offset: i64, scr_offset: i64) {
     if !is_pack(s) {
         return;
     }
-    let scr = (get_scr(s) as i64 + offset * 300).max(0) as u64;
+    let scr = (get_scr(s) as i64 + scr_offset * 300).max(0) as u64;
     let nav = is_nav(s);
     if nav {
         Nav::set_scr(s, scr);

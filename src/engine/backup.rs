@@ -135,6 +135,22 @@ fn title_vobs(video_dir: &Path) -> Vec<Vec<PathBuf>> {
         .collect()
 }
 
+/// Umfang der Quelle für die Anzeige „von ursprünglich …“: die ganze DVD oder beim Neu-
+/// Zusammenstellen nur die gewählten Teile, nach dem Schnitt.
+fn source_size(disc: &Disc, plan: &Plan) -> f64 {
+    match plan.mode {
+        Mode::FullDisc => disc.total_sectors as f64,
+        Mode::Reauthor => plan
+            .reauthor
+            .iter()
+            .map(|e| {
+                let cells: f64 = crate::engine::plan::reauthor_cells(disc, e).iter().map(|k| disc.stats_for(k).total).sum();
+                cells * crate::engine::plan::entry_kept_fraction(disc, e)
+            })
+            .sum(),
+    }
+}
+
 /// Übersichtsbild neben der Ausgabe: gleicher Name, Endung .jpg.
 fn sheet_path_for(output: &Output) -> PathBuf {
     match output {
@@ -922,7 +938,7 @@ fn run_inner(req: &BackupRequest, tx: &Sender<BackupMsg>, cancel: &AtomicBool) -
             path: path.clone(),
             sectors,
             target_sectors: req.plan.target_sectors,
-            source_sectors: total_in as f64,
+            source_sectors: source_size(disc, &req.plan),
             seconds: started.elapsed().as_secs_f64(),
             fits: sectors <= req.plan.target_sectors,
             burn_started: false,
@@ -1031,7 +1047,7 @@ fn run_inner(req: &BackupRequest, tx: &Sender<BackupMsg>, cancel: &AtomicBool) -
         path: out_path,
         sectors,
         target_sectors: req.plan.target_sectors,
-        source_sectors: disc.total_sectors as f64,
+        source_sectors: source_size(disc, &req.plan),
         seconds: started.elapsed().as_secs_f64(),
         fits: sectors <= req.plan.target_sectors,
         burn_started,
