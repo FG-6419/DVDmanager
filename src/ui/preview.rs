@@ -117,7 +117,11 @@ impl PreviewState {
     #[cfg(debug_assertions)]
     pub fn dev_status(&self) -> String {
         format!(
-            "abschnitt={} zeit={:?} bild={} spielt={} anhalten_bei={:?}",
+            "alle={} leiste={:.0}/{:.0} drag={:?} abschnitt={} zeit={:?} bild={} spielt={} anhalten_bei={:?}",
+            self.program,
+            self.prog_position(),
+            self.prog_offsets().1,
+            self.drag,
             self.prog_cur,
             self.time_ms,
             self.has_frame,
@@ -235,6 +239,8 @@ impl PreviewState {
         let next = self.prog_cur + 1;
         let start = self.prog[next].1;
         self.prog_cur = next;
+        // Zeitleiste gleich an den Anfang des nächsten Abschnitts, nicht erst mit dem ersten Bild
+        self.time_ms = Some(start as u64);
         self.prog_seek = Some(start);
         self.prog_play = Some(self.playing);
         true
@@ -280,6 +286,7 @@ impl PreviewState {
         } else {
             let play = self.playing;
             self.prog_cur = k;
+            self.time_ms = Some(local as u64);
             self.prog_seek = Some(local);
             self.prog_play = Some(play);
         }
@@ -465,7 +472,9 @@ impl App {
         let st = &mut self.preview;
         st.program = true;
         st.prog_cur = i;
-        st.prog_seek = Some((a.2 - LISTEN_MS).max(a.1));
+        let from = (a.2 - LISTEN_MS).max(a.1);
+        st.time_ms = Some(from as u64);
+        st.prog_seek = Some(from);
         st.prog_play = Some(true);
         let until = (b.1 + LISTEN_MS).min(b.2);
         st.listen_until = Some((i + 1, until, Instant::now() + Duration::from_secs_f64(LISTEN_MS * 2.0 / 1000.0 + 8.0)));

@@ -2,6 +2,10 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.011 · 2026-11-11 11:03
+
+- Zeitleiste bei „Alle Schnitte“ und „Übergang anhören“: Beim Wechsel zum nächsten Eintrag sprang der Punkt kurz ans rechte Ende, bis das erste Bild geladen war. Er steht jetzt sofort an der Schnittstelle.
+
 ## 1.0.010 · 2026-11-11 10:44
 
 - „Übergang anhören“ sprang nur an den Anfang des Titels. Sprungstelle und Start gingen an die alte Vorschau und beim Neuladen verloren. Jetzt spielt der Knopf wie gedacht 2,5 s vor bis 2,5 s nach der Schnittstelle und hält dann an.

@@ -1002,9 +1002,17 @@ impl App {
             ("listen", 5) => {
                 self.plan.mode = discslim::engine::plan::Mode::Reauthor;
                 if let Some(d) = self.disc.clone() {
-                    for (t, a, b) in [(0usize, 10_000u64, 20_000u64), (2, 5_000, 15_000)] {
+                    // DISCSLIM_LISTEN=same|samekey: zwei aneinanderliegende Szenen desselben Titels
+                    let variant = std::env::var("DISCSLIM_LISTEN").unwrap_or_default();
+                    let parts: [(usize, u64, u64); 2] = if variant.starts_with("same") {
+                        [(0, 10_000, 20_000), (0, 20_000, 30_000)]
+                    } else {
+                        [(0, 10_000, 20_000), (2, 5_000, 15_000)]
+                    };
+                    let exact = variant != "samekey";
+                    for (t, a, b) in parts {
                         let mut e = discslim::engine::plan::ReauthorEntry::new(t, 0, d.titles[t].chapters.len().saturating_sub(1), Default::default());
-                        e.cut = discslim::engine::plan::Cut { start_ms: Some(a), end_ms: Some(b), exact: true };
+                        e.cut = discslim::engine::plan::Cut { start_ms: Some(a), end_ms: Some(b), exact };
                         self.plan.reauthor.push(e);
                     }
                 }
