@@ -1326,12 +1326,36 @@ impl App {
     fn view_chapter_marks(&mut self, ui: &mut Ui, disc: &Disc, i: usize) {
         let p = self.pal;
         let now = self.preview.current_ms();
+        if i >= self.plan.reauthor.len() {
+            return;
+        }
+        section(ui, &p, ic::BOOKMARK_SIMPLE, tr!("KAPITELMARKEN", "CHAPTER MARKERS"));
+
+        // Gilt für die ganze neue DVD, nicht nur für diesen Eintrag
+        let several = self.plan.reauthor.len() > 1;
+        ui.add_enabled_ui(several, |ui| {
+            style::check(ui, &p, &mut self.plan.chapters_at_cuts, tr!("An Schnitten Kapitelmarken einfügen", "Insert chapter markers at cuts"));
+        })
+        .response
+        .on_hover_text(tr!(
+            "Alle Einträge der Liste „Neue DVD“ laufen als ein Titel hintereinander, und jeder Eintrag beginnt ein Kapitel. Weiter und Zurück am Player springen dann von Schnitt zu Schnitt. Eigene Marken und die Kapitel der DVD innerhalb der Einträge bleiben dazu erhalten. Einträge mit anderem Bild- oder Tonformat beginnen einen neuen Titel. Gilt für DVD-Ordner, ISO und Brennen.",
+            "All entries of the “New DVD” list play as one title, and each entry starts a chapter. Next and Previous on the player then jump from cut to cut. Your own markers and the DVD's chapters inside the entries are kept as well. Entries with a different video or audio format start a new title. Applies to DVD folder, ISO and burning."
+        ));
+        if self.plan.chapters_at_cuts && several {
+            let groups = self.plan.title_groups(disc);
+            let text = if groups.len() == 1 {
+                trf!("Die neue DVD hat einen Titel mit {} Schnitten.", "The new DVD has one title with {} cuts.", self.plan.reauthor.len())
+            } else {
+                trf!("Die neue DVD hat {} Titel (verschiedene Formate).", "The new DVD has {} titles (different formats).", groups.len())
+            };
+            ui.label(RichText::new(text).size(12.5).color(p.muted));
+        }
+        ui.add_space(2.0);
+
         let Some(e) = self.plan.reauthor.get(i) else { return };
         let total = entry_duration_ms(disc, e);
         let (cut_a, cut_b) = e.cut.effective(total);
         let cut_b = cut_b.min(total);
-        section(ui, &p, ic::BOOKMARK_SIMPLE, tr!("KAPITELMARKEN", "CHAPTER MARKERS"));
-
         let Some(marks) = e.chapter_marks.clone() else {
             let n = e.last_chapter + 1 - e.first_chapter.min(e.last_chapter);
             let text = if n == 1 { tr!("Die DVD hat hier 1 Kapitel.", "The DVD has 1 chapter here.").to_string() } else { trf!("Die {n} Kapitel der DVD werden übernommen.", "The DVD's {n} chapters are kept.") };

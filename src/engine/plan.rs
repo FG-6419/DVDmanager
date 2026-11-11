@@ -285,6 +285,9 @@ pub struct Plan {
     pub verify: bool,
     /// Übersichtsbild (JPG) der Ausgabe: Abstand der Vorschaubilder in Sekunden.
     pub sheet_secs: Option<u32>,
+    /// Neu zusammenstellen: Einträge zu einem Titel zusammenfassen, jeder Eintrag
+    /// beginnt dort ein Kapitel (Kapitelmarke an jedem Schnitt).
+    pub chapters_at_cuts: bool,
 }
 
 /// Länge der Ton-Blende an Schnittstellen (je Seite).
@@ -371,7 +374,35 @@ impl Plan {
             declick: true,
             verify: true,
             sheet_secs: None,
+            chapters_at_cuts: false,
         }
+    }
+
+    /// Welche Einträge zusammen einen Titel der neuen DVD bilden (Indizes in `reauthor`).
+    /// Ohne `chapters_at_cuts` ist jeder Eintrag ein eigener Titel. Mit der Option werden
+    /// aufeinanderfolgende Einträge zusammengefasst, solange Bild, Ton und Untertitel
+    /// gleich aufgebaut sind (ein Titel kann nur ein Format haben); sonst beginnt ein
+    /// neuer Titel.
+    pub fn title_groups(&self, disc: &Disc) -> Vec<Vec<usize>> {
+        let attrs = |e: &ReauthorEntry| -> Option<&[u8]> {
+            let t = disc.titles.get(e.title)?;
+            let v = disc.vts.get(&t.vts)?;
+            // Nur die Angaben für die Titel (ab 0x200), nicht die für Menüs
+            v.raw.get(0x200..crate::engine::author::ATTR_END)
+        };
+        let mut groups: Vec<Vec<usize>> = Vec::new();
+        for (i, e) in self.reauthor.iter().enumerate() {
+            let join = self.chapters_at_cuts
+                && groups.last().and_then(|g| g.last()).is_some_and(|&p| {
+                    let a = attrs(&self.reauthor[p]);
+                    a.is_some() && a == attrs(e)
+                });
+            match groups.last_mut() {
+                Some(g) if join => g.push(i),
+                _ => groups.push(vec![i]),
+            }
+        }
+        groups
     }
 
     /// Plan für die Ausgabe gewählter Titel in eine einzige Datei. selected bezieht sich

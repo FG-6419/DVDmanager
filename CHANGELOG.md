@@ -2,6 +2,10 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.017 · 2026-11-11 20:17
+
+- Neue Option „An Schnitten Kapitelmarken einfügen“ unter Kapitelmarken: Alle Einträge der Liste „Neue DVD“ laufen als ein Titel nahtlos hintereinander, und jeder Eintrag beginnt ein Kapitel. Weiter und Zurück am Player springen so von Schnitt zu Schnitt. Eigene Marken und die Kapitel der DVD innerhalb der Einträge bleiben erhalten. Einträge mit anderem Bild- oder Tonformat beginnen einen neuen Titel. Die Einstellung wird im Projekt gespeichert und gilt für DVD-Ordner, ISO und Brennen.
+
 ## 1.0.016 · 2026-11-11 18:18
 
 - Umschalt+Klick in der Liste „Neue DVD“ rechnet den Bereich jetzt immer vom zuletzt ohne Umschalt geklickten Eintrag aus, wie im Explorer. Bisher galt der vorige Umschalt+Klick als Anfang, und ein weiterer Umschalt+Klick markierte nur den Rest.

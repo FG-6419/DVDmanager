@@ -145,6 +145,59 @@ fn custom_chapter_marks() {
     assert_eq!(re.titles[0].chapters.len(), t.chapters.len());
 }
 
+/// "An Schnitten Kapitelmarken einfügen": alle Einträge in einem Titel, jeder beginnt ein Kapitel.
+#[test]
+fn chapters_at_cuts() {
+    let w = work("kapitel_schnitte");
+    let src = demo::build_sample(&w, |_| {}).unwrap();
+    let disc = open_analysed(&src);
+    let ti = longest_title(&disc);
+    let t = &disc.titles[ti];
+    let last = t.chapters.len() - 1;
+    let total = t.ms;
+    // Drei Ausschnitte in anderer Reihenfolge, einer bildgenau, einer mit eigener Marke
+    let parts = [(total / 2, total * 3 / 4, false), (500, total / 4, true), (total * 3 / 4, total, false)];
+    let mut plan = Plan::new(NO_TARGET);
+    plan.mode = Mode::Reauthor;
+    plan.chapters_at_cuts = true;
+    let mut lens = Vec::new();
+    for (k, (a, b, exact)) in parts.iter().enumerate() {
+        let mut e = ReauthorEntry::new(ti, 0, last, ItemSettings::default());
+        e.cut = Cut { start_ms: Some(*a), end_ms: Some(*b), exact: *exact };
+        if k == 2 {
+            e.chapter_marks = Some(vec![a + (b - a) / 2]);
+        }
+        lens.push(b - a);
+        plan.reauthor.push(e);
+    }
+    assert_eq!(plan.title_groups(&disc), vec![vec![0, 1, 2]]);
+    let out = w.join("ein_titel");
+    let s = run_backup(open_analysed(&src), plan, Output::Folder(out.clone()));
+    let vdir = out.join("VIDEO_TS");
+    check_cells(&vdir);
+    let re = open_analysed(&vdir);
+    assert_eq!(re.titles.len(), 1, "ein Titel");
+    let starts: Vec<u64> = re.titles[0].chapters.iter().map(|c| c.start_ms).collect();
+    println!("Kapitel: {starts:?}, Längen {lens:?}, Prüfung {:?}", s.check);
+    assert_eq!(starts.len(), 4, "drei Schnitte und eine eigene Marke");
+    let want = [0, lens[0], lens[0] + lens[1], lens[0] + lens[1] + lens[2] / 2];
+    for (c, m) in starts.iter().zip(want) {
+        assert!(c.abs_diff(m) <= 1_100, "Kapitel bei {c} statt {m}");
+    }
+    let sum: u64 = lens.iter().sum();
+    assert!(re.titles[0].ms.abs_diff(sum) <= 1_500, "Länge {} statt {sum}", re.titles[0].ms);
+    let check = s.check.expect("Prüfung fehlt");
+    assert!(check.is_clean(), "{check:?}");
+
+    // Ohne die Option: drei Titel
+    let mut plan = Plan::new(NO_TARGET);
+    plan.mode = Mode::Reauthor;
+    for _ in 0..3 {
+        plan.reauthor.push(ReauthorEntry::new(ti, 0, last, ItemSettings::default()));
+    }
+    assert_eq!(plan.title_groups(&disc).len(), 3);
+}
+
 /// Mittlere Farbe (R, G, B) des Bildes an einer Stelle eines Titels.
 fn frame_rgb(disc: &Disc, title: usize, ms: f64) -> [f64; 3] {
     use discslim::engine::preview::{self, PreviewCmd};
@@ -551,8 +604,21 @@ fn real_project_backup() {
     let source = discslim::engine::import::open_source(&proj.source, &mut |_, _| true).unwrap();
     let mut disc = Disc::open(source).unwrap();
     disc.analyse(true, &mut |_, _| true).unwrap();
-    let plan = proj.plan_for(&disc).unwrap();
+    let mut plan = proj.plan_for(&disc).unwrap();
     let w = work("echtes_projekt");
+    // DVDMANAGER_REAL_JOIN=1: als DVD-Ordner mit Kapitelmarken an den Schnitten
+    if std::env::var("DVDMANAGER_REAL_JOIN").is_ok() {
+        plan.chapters_at_cuts = true;
+        let out = w.join("DVD");
+        let s = run_backup(disc, plan.clone(), Output::Folder(out.clone()));
+        check_cells(&out.join("VIDEO_TS"));
+        let re = open_analysed(&out.join("VIDEO_TS"));
+        for t in &re.titles {
+            println!("Titel {}: {} ms, Kapitel {:?}", t.number, t.ms, t.chapters.iter().map(|c| c.start_ms).collect::<Vec<_>>());
+        }
+        println!("{} Einträge, Prüfung: {:?}", plan.reauthor.len(), s.check);
+        return;
+    }
     let out = w.join("projekt.mpg");
     let s = run_backup(disc, plan, Output::Mpeg { path: out.clone(), audio: None });
     println!("{} Sektoren von ursprünglich {:.0}, Prüfung: {:?}", s.sectors, s.source_sectors, s.check);

@@ -45,6 +45,8 @@ pub struct PlanData {
     pub region_free: bool,
     pub split_vob: bool,
     pub default_video: VideoMode,
+    #[serde(default)]
+    pub chapters_at_cuts: bool,
 }
 
 impl From<&Plan> for PlanData {
@@ -64,6 +66,7 @@ impl From<&Plan> for PlanData {
             region_free: p.region_free,
             split_vob: p.split_vob,
             default_video: p.default_video,
+            chapters_at_cuts: p.chapters_at_cuts,
         }
     }
 }
@@ -78,6 +81,7 @@ impl PlanData {
         plan.region_free = self.region_free;
         plan.split_vob = self.split_vob;
         plan.default_video = self.default_video;
+        plan.chapters_at_cuts = self.chapters_at_cuts;
         plan
     }
 }

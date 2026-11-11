@@ -400,24 +400,23 @@ fn run_reauthor(disc: &Disc, plan: &Plan, dir: &Path, ctx: &mut Ctx, files: &mut
     if plan.reauthor.is_empty() {
         return Err(tr!("Es wurde noch kein Titel für die neue DVD ausgewählt.", "No title has been chosen for the new DVD yet.").into());
     }
-    if plan.reauthor.len() > 99 {
+    let groups = plan.title_groups(disc);
+    if groups.len() > 99 {
         return Err(tr!("Eine DVD kann höchstens 99 Titel enthalten.", "A DVD can contain at most 99 titles.").into());
     }
     let est = plan.estimate(disc);
     let mut budget = Budget::new(plan, &est, 50.0);
-    let count = plan.reauthor.len();
+    let count = groups.len();
     let mut vts_files = Vec::new();
     let mut titles = Vec::new();
     let mut vts_attrs = Vec::new();
     let mut sizes = Vec::new();
     let mut total = 0u64;
 
-    for (i, entry) in plan.reauthor.iter().enumerate() {
+    for (i, group) in groups.iter().enumerate() {
         ctx.check()?;
         let title_no = i + 1;
-        let label = trf!("Titel {title_no} von {count}", "Title {title_no} of {count}");
-        let _ = ctx.tx.send(BackupMsg::Stage(label.clone()));
-        let (avts, paths, entry_titles) = author_entry(disc, plan, entry, title_no, count, dir, &mut budget, ctx, &label)?;
+        let (avts, paths, entry_titles) = author_entry(disc, plan, group, title_no, count, dir, &mut budget, ctx)?;
         let ifo_bytes = author::build_vts(&avts);
         let name = format!("VTS_{title_no:02}_0.IFO");
         let (ifo_path, bup_path) = write_with_bup(dir, &name, &ifo_bytes)?;
@@ -452,32 +451,50 @@ fn run_reauthor(disc: &Disc, plan: &Plan, dir: &Path, ctx: &mut Ctx, files: &mut
     Ok(total)
 }
 
+/// Offene Zelle beim Schreiben eines Titels.
+struct OpenCell {
+    first: u32,
+    last_vobu: u32,
+    /// Gemessene Dauer
+    measured: u64,
+    /// Dauer laut Zellentabelle der DVD
+    table_ms: u64,
+    flags: [u8; 4],
+}
+
+/// Schreibt einen Titel der neuen DVD aus einem oder mehreren Einträgen (`group`:
+/// Indizes in `plan.reauthor`). Mehrere Einträge laufen nahtlos hintereinander, und
+/// jeder beginnt ein Kapitel.
 #[allow(clippy::too_many_arguments)]
 fn author_entry(
     disc: &Disc,
     plan: &Plan,
-    entry: &ReauthorEntry,
+    group: &[usize],
     title_no: usize,
     count: usize,
     dir: &Path,
     budget: &mut Budget,
     ctx: &mut Ctx,
-    label: &str,
 ) -> Res<(AVts, Vec<PathBuf>, TitleEntry)> {
-    let t = disc.titles.get(entry.title).ok_or(tr!("Titel nicht gefunden", "Title not found"))?;
-    let v = disc.vts.get(&t.vts).ok_or(tr!("Titelset nicht gefunden", "Title set not found"))?;
-    let decision = CellDecision::from_settings(&entry.settings);
+    let entries: Vec<&ReauthorEntry> = group.iter().filter_map(|i| plan.reauthor.get(*i)).collect();
+    let first_entry = *entries.first().ok_or(tr!("Titel nicht gefunden", "Title not found"))?;
+    let t0 = disc.titles.get(first_entry.title).ok_or(tr!("Titel nicht gefunden", "Title not found"))?;
+    let v0 = disc.vts.get(&t0.vts).ok_or(tr!("Titelset nicht gefunden", "Title set not found"))?;
+    let joined = entries.len() > 1;
     let mut writer = SpaceWriter::new(dir, &format!("VTS_{title_no:02}_"), false, plan.split_vob);
-    let mut rq = Requant::new();
-    let mut map = SectorMap::default();
     let mut new_pos = 0u32;
+    let pal = v0.video.pal;
 
-    let mut pgc = APgc { pal: v.video.pal, ..Default::default() };
-    if let Some(src) = t.pgcs.first().and_then(|p| v.pgcs.get(*p)) {
+    // Spuren sind eingeschaltet, wenn irgendein Eintrag des Titels sie behält.
+    let decisions: Vec<CellDecision> = entries.iter().map(|e| CellDecision::from_settings(&e.settings)).collect();
+    let keep_audio = |ph: usize| decisions.iter().any(|d| d.keep_audio[ph]);
+    let keep_sub = |ph: usize| decisions.iter().any(|d| d.keep_sub[ph]);
+    let mut pgc = APgc { pal, ..Default::default() };
+    if let Some(src) = t0.pgcs.first().and_then(|p| v0.pgcs.get(*p)) {
         pgc.audio_ctl = src.audio_ctl;
         pgc.sub_ctl = src.sub_ctl;
         for i in 0..8 {
-            if pgc.audio_ctl[i] & 0x8000 != 0 && !decision.keep_audio[usize::from((pgc.audio_ctl[i] >> 8) & 7)] {
+            if pgc.audio_ctl[i] & 0x8000 != 0 && !keep_audio(usize::from((pgc.audio_ctl[i] >> 8) & 7)) {
                 pgc.audio_ctl[i] = 0;
             }
         }
@@ -485,13 +502,13 @@ fn author_entry(
             let c = pgc.sub_ctl[i];
             if c & 0x8000_0000 != 0 {
                 let phys = [(c >> 24) & 0x1F, (c >> 16) & 0x1F, (c >> 8) & 0x1F, c & 0x1F];
-                if !phys.iter().any(|p| decision.keep_sub[*p as usize]) {
+                if !phys.iter().any(|p| keep_sub(*p as usize)) {
                     pgc.sub_ctl[i] = 0;
                 }
             }
         }
-        if src.offset + 0xE4 <= v.raw.len() {
-            pgc.palette.copy_from_slice(&v.raw[src.offset + 0xA4..src.offset + 0xE4]);
+        if src.offset + 0xE4 <= v0.raw.len() {
+            pgc.palette.copy_from_slice(&v0.raw[src.offset + 0xA4..src.offset + 0xE4]);
         }
     }
     pgc.post = vec![if title_no < count { author::cmd_jump_tt((title_no + 1) as u8) } else { author::CMD_EXIT }];
@@ -500,133 +517,157 @@ fn author_entry(
     let mut cell_addrs: Vec<CellAddr> = Vec::new();
     let mut admap: Vec<u32> = Vec::new();
     let mut time_points: Vec<(u64, u32)> = Vec::new();
+    let mut maps: Vec<SectorMap> = Vec::with_capacity(entries.len());
     let mut elapsed_base = 0u64;
     let mut vob_new = 0u16;
     let mut cell_new = 0u8;
-    let mut last_src_vob = None;
-    let trimmed = entry.cut.is_trim(crate::engine::plan::entry_duration_ms(disc, entry));
-    // Eigene Kapitelmarken (Zeitachse der Ausgabe). An jeder Marke beginnt eine neue
-    // Zelle und ein neues Programm, auf eine VOBU (etwa eine halbe Sekunde) genau.
-    let marks = entry.output_marks(disc);
-    let mut next_mark = 0usize;
-    // Zeiten in der Zelle neu zählen, sobald Zellen nicht mehr denen der DVD entsprechen.
-    let retime = trimmed || marks.is_some();
-    let pal = v.video.pal;
-    // Offene Zelle: (PGC, Zelle in der PGC, erster Sektor, letzte VOBU, gemessene Dauer, Dauer laut Tabelle)
-    let mut open: Option<(usize, usize, u32, u32, u64, u64)> = None;
+    // Mehrere Einträge in einem Titel: Zeitstempel fortlaufend machen, damit der Player
+    // ohne Pause von einem Schnitt zum nächsten spielt.
+    let mut retimer = Retimer::default();
+    let mut open: Option<OpenCell> = None;
 
-    let close = |open: &mut Option<(usize, usize, u32, u32, u64, u64)>,
+    let close = |open: &mut Option<OpenCell>,
                  cells_out: &mut Vec<ACell>,
                  cell_addrs: &mut Vec<CellAddr>,
                  elapsed_base: &mut u64,
                  new_pos: u32,
                  vob: u16,
-                 cell: u8| {
-        if let Some((pgc_idx, cell_idx, first, last_vobu, measured, table_ms)) = open.take() {
-            if new_pos == first {
+                 cell: u8,
+                 retime: bool| {
+        if let Some(c) = open.take() {
+            if new_pos == c.first {
                 return;
             }
-            let ms = if retime { measured } else { table_ms };
-            let offset = v.pgcs.get(pgc_idx).map(|p| p.offset).unwrap_or(0);
-            cells_out.push(ACell {
-                ms,
-                flags: cell_flags(&v.raw, offset, cell_idx),
-                first,
-                last_vobu,
-                last: new_pos - 1,
-                vob,
-                cell,
-            });
-            cell_addrs.push(CellAddr { vob_id: vob, cell_id: cell, start: first, last: new_pos - 1 });
+            let ms = if retime { c.measured } else { c.table_ms };
+            cells_out.push(ACell { ms, flags: c.flags, first: c.first, last_vobu: c.last_vobu, last: new_pos - 1, vob, cell });
+            cell_addrs.push(CellAddr { vob_id: vob, cell_id: cell, start: c.first, last: new_pos - 1 });
             *elapsed_base += ms;
         }
     };
 
-    entry_stream(disc, entry, plan.declick, |ev| {
-        ctx.check()?;
-        let item = match ev {
-            StreamEvent::Skipped(n) => {
-                ctx.done_in += n;
-                ctx.report(1.0, label);
-                return Ok(());
-            }
-            StreamEvent::Vobu(item) => item,
-        };
-        let mut mark_hit = false;
-        if let Some(m) = &marks {
-            while next_mark < m.len() && m[next_mark] <= item.out_t0_ms {
-                next_mark += 1;
-                mark_hit = true;
-            }
-            // Eine Marke in der allerersten VOBU fällt mit Kapitel 1 zusammen.
-            if open.is_none() && cells_out.is_empty() {
-                mark_hit = false;
-            }
-        }
-        if item.cell_start || mark_hit {
-            close(&mut open, &mut cells_out, &mut cell_addrs, &mut elapsed_base, new_pos, vob_new, cell_new);
-            if cells_out.len() >= 255 {
-                return Err(tr!("Der Titel hat zu viele Zellen für eine einzelne Programmkette.", "The title has too many cells for a single program chain.").into());
-            }
-            if last_src_vob != Some(item.pc.vob_id) || cell_new == 255 {
-                vob_new += 1;
-                cell_new = 0;
-                last_src_vob = Some(item.pc.vob_id);
-            }
-            cell_new += 1;
-            let new_program = match &marks {
-                Some(_) => mark_hit,
-                None => t.chapters.iter().any(|c| c.first_cell_idx == item.title_cell),
-            };
-            if new_program || pgc.programs.is_empty() {
-                if pgc.programs.len() >= 99 {
-                    return Err(tr!("Ein Titel kann höchstens 99 Kapitel haben.", "A title can have at most 99 chapters.").into());
-                }
-                pgc.programs.push((cells_out.len() + 1) as u8);
-            }
-            rq.new_cell();
-            open = Some((item.pc.pgc, item.pc.cell_idx, new_pos, new_pos, 0, item.pc.ms));
-        }
-        let mut data = item.data;
-        if retime {
-            // Nach dem Schnitt zählt die Zeit in der Zelle neu.
-            let in_cell = item.out_t0_ms.saturating_sub(elapsed_base);
-            data[DSI_OFF + 28..DSI_OFF + 32].copy_from_slice(&encode_time(in_cell, pal));
-        }
-        let opts = decision.video_opts(budget.ratio());
-        let mut out = transcode_vobu(&data, &decision, opts, &mut rq);
-        let in_sectors = item.in_sectors as u32;
-        let out_sectors = (out.data.len() / SECTOR) as u32;
-        Nav::set_ids(&mut out.data, vob_new, cell_new);
-        writer.write(&out.data)?;
-        let start = item.start as u32;
-        map.vobus.push((start, start + in_sectors - 1, new_pos, new_pos + out_sectors - 1));
-        admap.push(new_pos);
-        let at = if retime { item.out_t0_ms } else { elapsed_base + Nav::cell_elapsed_ms(&data) };
-        time_points.push((at, new_pos));
-        if let Some(o) = open.as_mut() {
-            o.3 = new_pos;
-            o.4 += item.dur_ms;
-        }
-        new_pos += out_sectors;
-        budget.account(&decision, out.video_in, out.kept_other, u64::from(out_sectors));
-        ctx.written += u64::from(out_sectors);
-        ctx.done_in += u64::from(in_sectors);
-        ctx.report(f64::from(opts.ratio), label);
-        Ok(())
-    })?;
-    close(&mut open, &mut cells_out, &mut cell_addrs, &mut elapsed_base, new_pos, vob_new, cell_new);    writer.finish()?;
-    if new_pos == 0 {
-        return Err(trf!("Titel {} enthält keine lesbaren Videodaten.", "Title {} contains no readable video data.", t.number));
-    }
-    map.new_total = new_pos;
+    for (k, (entry, decision)) in entries.iter().zip(&decisions).enumerate() {
+        let entry_no = group[k] + 1;
+        let label = trf!("Titel {} von {}", "Title {} of {}", entry_no, plan.reauthor.len());
+        let _ = ctx.tx.send(BackupMsg::Stage(label.clone()));
+        let t = disc.titles.get(entry.title).ok_or(tr!("Titel nicht gefunden", "Title not found"))?;
+        let v = disc.vts.get(&t.vts).ok_or(tr!("Titelset nicht gefunden", "Title set not found"))?;
+        let mut rq = Requant::new();
+        let mut map = SectorMap::default();
+        let mut last_src_vob = None;
+        let mut entry_start = true;
+        let trimmed = entry.cut.is_trim(crate::engine::plan::entry_duration_ms(disc, entry));
+        // Eigene Kapitelmarken (Zeitachse der Ausgabe). An jeder Marke beginnt eine neue
+        // Zelle und ein neues Programm, auf eine VOBU (etwa eine halbe Sekunde) genau.
+        let marks = entry.output_marks(disc);
+        let mut next_mark = 0usize;
+        // Zeiten in der Zelle neu zählen, sobald Zellen nicht mehr denen der DVD entsprechen.
+        let retime = trimmed || marks.is_some() || joined;
+        // Beginn dieses Eintrags auf der Zeitachse des Titels
+        let entry_base = elapsed_base;
 
-    // Verweise auf VOBUs auflösen (die Tabelle muss nach altem Start sortiert sein)
-    let mut lookup = map.clone();
-    lookup.vobus.sort_by_key(|v| v.0);
-    writer.patch_all(&map, |s, i| {
-        patch_nav(s, map.vobus[i], &lookup, plan.remove_puo, true);
-    })?;
+        entry_stream(disc, entry, plan.declick, |ev| {
+            ctx.check()?;
+            let item = match ev {
+                StreamEvent::Skipped(n) => {
+                    ctx.done_in += n;
+                    ctx.report(1.0, &label);
+                    return Ok(());
+                }
+                StreamEvent::Vobu(item) => item,
+            };
+            let mut mark_hit = false;
+            if let Some(m) = &marks {
+                while next_mark < m.len() && m[next_mark] <= item.out_t0_ms {
+                    next_mark += 1;
+                    mark_hit = true;
+                }
+                // Eine Marke in der ersten VOBU fällt mit dem Anfang des Eintrags zusammen.
+                if entry_start {
+                    mark_hit = false;
+                }
+            }
+            if item.cell_start || mark_hit || entry_start {
+                close(&mut open, &mut cells_out, &mut cell_addrs, &mut elapsed_base, new_pos, vob_new, cell_new, retime);
+                if cells_out.len() >= 255 {
+                    return Err(tr!("Der Titel hat zu viele Zellen für eine einzelne Programmkette.", "The title has too many cells for a single program chain.").into());
+                }
+                if last_src_vob != Some(item.pc.vob_id) || cell_new == 255 {
+                    vob_new += 1;
+                    cell_new = 0;
+                    last_src_vob = Some(item.pc.vob_id);
+                }
+                cell_new += 1;
+                // Jeder Eintrag beginnt ein Kapitel, danach eigene Marken oder die der DVD.
+                let new_program = entry_start
+                    || match &marks {
+                        Some(_) => mark_hit,
+                        None => t.chapters.iter().any(|c| c.first_cell_idx == item.title_cell),
+                    };
+                if new_program || pgc.programs.is_empty() {
+                    if pgc.programs.len() >= 99 {
+                        return Err(tr!("Ein Titel kann höchstens 99 Kapitel haben.", "A title can have at most 99 chapters.").into());
+                    }
+                    pgc.programs.push((cells_out.len() + 1) as u8);
+                }
+                rq.new_cell();
+                let offset = v.pgcs.get(item.pc.pgc).map(|p| p.offset).unwrap_or(0);
+                let mut flags = cell_flags(&v.raw, offset, item.pc.cell_idx);
+                if joined {
+                    // Die Zeitstempel laufen durch; keine Unterbrechung der Systemuhr.
+                    flags[0] &= !0x02;
+                }
+                open = Some(OpenCell { first: new_pos, last_vobu: new_pos, measured: 0, table_ms: item.pc.ms, flags });
+                entry_start = false;
+            }
+            let mut data = item.data;
+            if retime {
+                // Nach dem Schnitt zählt die Zeit in der Zelle neu.
+                let in_cell = (entry_base + item.out_t0_ms).saturating_sub(elapsed_base);
+                data[DSI_OFF + 28..DSI_OFF + 32].copy_from_slice(&encode_time(in_cell, pal));
+            }
+            let opts = decision.video_opts(budget.ratio());
+            let mut out = transcode_vobu(&data, decision, opts, &mut rq);
+            let in_sectors = item.in_sectors as u32;
+            let out_sectors = (out.data.len() / SECTOR) as u32;
+            Nav::set_ids(&mut out.data, vob_new, cell_new);
+            if joined {
+                retimer.apply(&mut out.data);
+            }
+            writer.write(&out.data)?;
+            let start = item.start as u32;
+            map.vobus.push((start, start + in_sectors - 1, new_pos, new_pos + out_sectors - 1));
+            admap.push(new_pos);
+            let at = if retime { entry_base + item.out_t0_ms } else { elapsed_base + Nav::cell_elapsed_ms(&data) };
+            time_points.push((at, new_pos));
+            if let Some(o) = open.as_mut() {
+                o.last_vobu = new_pos;
+                o.measured += item.dur_ms;
+            }
+            new_pos += out_sectors;
+            budget.account(decision, out.video_in, out.kept_other, u64::from(out_sectors));
+            ctx.written += u64::from(out_sectors);
+            ctx.done_in += u64::from(in_sectors);
+            ctx.report(f64::from(opts.ratio), &label);
+            Ok(())
+        })?;
+        close(&mut open, &mut cells_out, &mut cell_addrs, &mut elapsed_base, new_pos, vob_new, cell_new, retime);
+        maps.push(map);
+    }
+    writer.finish()?;
+    if new_pos == 0 {
+        return Err(trf!("Titel {} enthält keine lesbaren Videodaten.", "Title {} contains no readable video data.", t0.number));
+    }
+
+    // Verweise auf VOBUs auflösen. Sie gelten je Eintrag, die alten Sektornummern sind nur
+    // dort eindeutig (die Tabelle muss nach altem Start sortiert sein).
+    for mut map in maps {
+        map.new_total = new_pos;
+        let mut lookup = map.clone();
+        lookup.vobus.sort_by_key(|v| v.0);
+        writer.patch_all(&map, |s, i| {
+            patch_nav(s, map.vobus[i], &lookup, plan.remove_puo, true);
+        })?;
+    }
 
     pgc.cells = cells_out;
     let chapters = pgc.programs.len() as u16;
@@ -646,7 +687,7 @@ fn author_entry(
         k += 1;
     }
 
-    let attrs = v.raw[author::ATTR_START..author::ATTR_END].to_vec();
+    let attrs = v0.raw[author::ATTR_START..author::ATTR_END].to_vec();
     let avts = AVts {
         attrs,
         pgcs: vec![pgc],
