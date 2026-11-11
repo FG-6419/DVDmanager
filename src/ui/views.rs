@@ -513,50 +513,7 @@ impl App {
                 );
                 if r.clicked() {
                     let mods = ui.input(|inp| inp.modifiers);
-                    let cur = match self.sel {
-                        Selection::Entry(c) => Some(c),
-                        _ => None,
-                    };
-                    let mut go = None;
-                    if mods.command {
-                        // Strg+Klick: Eintrag dazu- oder abwählen
-                        if self.marked.is_empty() {
-                            self.marked.extend(cur);
-                        }
-                        if self.marked.insert(i) {
-                            go = Some(i);
-                        } else {
-                            self.marked.remove(&i);
-                            if current {
-                                go = self.marked.iter().next().copied();
-                            }
-                        }
-                    } else if mods.shift {
-                        // Umschalt+Klick: Bereich vom gewählten Eintrag bis hier
-                        let a = cur.unwrap_or(i);
-                        self.marked = (a.min(i)..=a.max(i)).collect();
-                        go = Some(i);
-                    } else {
-                        self.marked.clear();
-                        if !current {
-                            go = Some(i);
-                        }
-                    }
-                    // Nur noch einer markiert: das ist einfach die normale Auswahl
-                    if self.marked.len() == 1 {
-                        go = self.marked.iter().next().copied();
-                        self.marked.clear();
-                    }
-                    if let Some(g) = go.filter(|g| self.sel != Selection::Entry(*g)) {
-                        self.sel = Selection::Entry(g);
-                        self.preview.dirty = true;
-                        // Bei "Alle Schnitte" springt die Wiedergabe zu diesem Eintrag
-                        if self.preview.program {
-                            if let Some(c) = self.preview.prog.get(g).copied() {
-                                self.preview.prog_goto(g, c.1);
-                            }
-                        }
-                    }
+                    self.click_entry(i, mods.command, mods.shift);
                 }
                 r.context_menu(|ui| {
                     if ui.button(trf!("{}  Nach oben", "{}  Move up", ic::ARROW_UP)).clicked() {
@@ -656,6 +613,7 @@ impl App {
         // Andere Änderungen an der Liste verschieben die Stellen: Mehrfachauswahl aufheben
         if split.is_some() || dup.is_some() || swap.is_some() {
             self.marked.clear();
+            self.mark_anchor = None;
         }
         if let Some(i) = split {
             if i < self.plan.reauthor.len() {
@@ -835,6 +793,60 @@ impl App {
     }
 
     /// Legt für jedes Kapitel im Bereich einen eigenen Eintrag an (ab Position t).
+    /// Klick auf Eintrag `i` der Liste „Neue DVD“, mit Strg (`toggle`) oder Umschalt (`range`).
+    pub(super) fn click_entry(&mut self, i: usize, toggle: bool, range: bool) {
+        let current = self.sel == Selection::Entry(i);
+        let cur = match self.sel {
+            Selection::Entry(c) => Some(c),
+            _ => None,
+        };
+        let mut go = None;
+        if toggle {
+            // Strg+Klick: Eintrag dazu- oder abwählen; er wird neuer Ausgangspunkt
+            if self.marked.is_empty() {
+                self.marked.extend(cur);
+            }
+            self.mark_anchor = Some(i);
+            if self.marked.insert(i) {
+                go = Some(i);
+            } else {
+                self.marked.remove(&i);
+                if current {
+                    go = self.marked.iter().next().copied();
+                }
+            }
+        } else if range {
+            // Umschalt+Klick: Bereich vom Ausgangspunkt (letzter Klick ohne Umschalt) bis
+            // hier; weitere Umschalt+Klicks ändern nur das Ende, wie im Explorer
+            let n = self.plan.reauthor.len();
+            let a = self.mark_anchor.filter(|a| *a < n).or(cur).unwrap_or(i);
+            self.mark_anchor = Some(a);
+            self.marked = (a.min(i)..=a.max(i)).collect();
+            go = Some(i);
+        } else {
+            self.mark_anchor = Some(i);
+            self.marked.clear();
+            if !current {
+                go = Some(i);
+            }
+        }
+        // Nur noch einer markiert: das ist einfach die normale Auswahl
+        if self.marked.len() == 1 {
+            go = self.marked.iter().next().copied();
+            self.marked.clear();
+        }
+        if let Some(g) = go.filter(|g| self.sel != Selection::Entry(*g)) {
+            self.sel = Selection::Entry(g);
+            self.preview.dirty = true;
+            // Bei "Alle Schnitte" springt die Wiedergabe zu diesem Eintrag
+            if self.preview.program {
+                if let Some(c) = self.preview.prog.get(g).copied() {
+                    self.preview.prog_goto(g, c.1);
+                }
+            }
+        }
+    }
+
     /// Einträge, die eine Aktion betrifft: die markierten, sonst der gewählte.
     pub(super) fn chosen_entries(&self) -> Vec<usize> {
         let n = self.plan.reauthor.len();
@@ -861,6 +873,7 @@ impl App {
         let n = removed.len();
         self.undo_remove = Some(removed);
         self.marked.clear();
+        self.mark_anchor = None;
         self.sel = if self.plan.reauthor.is_empty() { Selection::None } else { Selection::Entry(first.min(self.plan.reauthor.len() - 1)) };
         self.preview.dirty = true;
         self.notice = Some((
@@ -873,6 +886,7 @@ impl App {
     pub(super) fn undo_last_remove(&mut self) {
         let Some(removed) = self.undo_remove.take() else { return };
         self.marked.clear();
+        self.mark_anchor = None;
         let mut first = None;
         for (i, e) in removed {
             let at = i.min(self.plan.reauthor.len());
@@ -918,6 +932,7 @@ impl App {
         entry.cut = Cut::whole(total, self.prefs.cut_exact);
         self.plan.reauthor.push(entry);
         self.marked.clear();
+        self.mark_anchor = None;
         self.sel = Selection::Entry(self.plan.reauthor.len() - 1);
         self.preview.dirty = true;
     }

@@ -211,6 +211,8 @@ pub struct App {
     keep_plan_on_load: bool,
     /// Mehrfachauswahl in der Liste „Neue DVD“ (Strg/Umschalt+Klick); leer = nur `sel`
     marked: std::collections::BTreeSet<usize>,
+    /// Ausgangspunkt für Umschalt+Klick: der zuletzt ohne Umschalt geklickte Eintrag
+    mark_anchor: Option<usize>,
     /// Zuletzt entfernte Einträge mit ihrer Stelle, für „Rückgängig“
     undo_remove: Option<Vec<(usize, discslim::engine::plan::ReauthorEntry)>>,
     /// Vorschaubilder der Einträge und die Schleife unter der Maus
@@ -368,6 +370,7 @@ impl App {
             drives_at: None,
             keep_plan_on_load: false,
             marked: Default::default(),
+            mark_anchor: None,
             undo_remove: None,
             thumbs: Some(thumbs::Thumbs::new(cc.egui_ctx.clone())),
             hover_loop: None,
@@ -698,6 +701,7 @@ impl App {
         }
         // Neue DVD: Auswahl und Rückgängig gehören zur alten Liste.
         self.marked.clear();
+        self.mark_anchor = None;
         self.undo_remove = None;
         // Neue DVD: alte Vorschaubilder gelten nicht mehr.
         if let Some(t) = self.thumbs.as_mut() {
@@ -1072,6 +1076,28 @@ impl App {
                 }
                 self.sel = Selection::Entry(0);
                 self.preview.dirty = true;
+            }
+            // Klickfolge mit Strg/Umschalt; protokolliert die Markierung nach jedem Klick
+            ("clicks", 5) => {
+                self.plan.mode = Mode::Reauthor;
+                if let Some(d) = self.disc.clone() {
+                    for _ in 0..2 {
+                        for (i, t) in d.titles.iter().enumerate() {
+                            self.plan.reauthor.push(discslim::engine::plan::ReauthorEntry::new(i, 0, t.chapters.len().saturating_sub(1), Default::default()));
+                        }
+                    }
+                }
+                self.sel = Selection::Entry(2);
+                let steps: [(usize, bool, bool); 7] = [(0, false, false), (3, false, true), (5, false, true), (2, false, true), (4, true, false), (5, false, true), (1, false, false)];
+                let mut out = String::new();
+                for (i, ctrl, shift) in steps {
+                    self.click_entry(i, ctrl, shift);
+                    let how = if ctrl { "Strg+" } else if shift { "Umschalt+" } else { "" };
+                    out += &format!("{how}Klick auf {}: markiert {:?}, gewählt {:?}\n", i + 1, self.marked.iter().map(|m| m + 1).collect::<Vec<_>>(), self.sel);
+                }
+                if let Ok(log) = std::env::var("DISCSLIM_DEV_LOG") {
+                    let _ = std::fs::write(log, out);
+                }
             }
             // Mehrfachauswahl: drei Einträge, 1 und 3 markiert, entfernen, rückgängig
             ("multi", 5) => {

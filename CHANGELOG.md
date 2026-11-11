@@ -2,6 +2,10 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.016 · 2026-11-11 18:18
+
+- Umschalt+Klick in der Liste „Neue DVD“ rechnet den Bereich jetzt immer vom zuletzt ohne Umschalt geklickten Eintrag aus, wie im Explorer. Bisher galt der vorige Umschalt+Klick als Anfang, und ein weiterer Umschalt+Klick markierte nur den Rest.
+
 ## 1.0.015 · 2026-11-11 18:06
 
 - Mehrfachauswahl in der Liste „Neue DVD“: Strg+Klick wählt einzelne Einträge dazu oder ab, Umschalt+Klick einen Bereich. Entfernen (Papierkorb, Rechtsklick-Menü) gilt dann für alle gewählten.
