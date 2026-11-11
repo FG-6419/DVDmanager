@@ -997,6 +997,32 @@ impl App {
                 self.preview.prog_seek = self.preview.prog.first().map(|c| c.1);
                 self.preview.prog_play = Some(true);
             }
+            // Übergang anhören: Eintrag 1 = Titel 1 ab 10 s, Eintrag 2 = Titel 3 ab 5 s.
+            // Protokolliert die Wiedergabe und wartet mit dem Prüfbild, bis sie angehalten hat.
+            ("listen", 5) => {
+                self.plan.mode = discslim::engine::plan::Mode::Reauthor;
+                if let Some(d) = self.disc.clone() {
+                    for (t, a, b) in [(0usize, 10_000u64, 20_000u64), (2, 5_000, 15_000)] {
+                        let mut e = discslim::engine::plan::ReauthorEntry::new(t, 0, d.titles[t].chapters.len().saturating_sub(1), Default::default());
+                        e.cut = discslim::engine::plan::Cut { start_ms: Some(a), end_ms: Some(b), exact: true };
+                        self.plan.reauthor.push(e);
+                    }
+                }
+                self.sel = Selection::Entry(0);
+                self.preview.dirty = true;
+            }
+            ("listen", 40) => self.listen_junction(0),
+            ("listen", n) if n > 40 => {
+                if let Ok(log) = std::env::var("DISCSLIM_DEV_LOG") {
+                    use std::io::Write;
+                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log) {
+                        let _ = writeln!(f, "{} {}", clock_now(), self.preview.dev_status());
+                    }
+                }
+                if self.preview.listen_until.is_some() || self.preview.is_playing() {
+                    self.frames = 100; // Prüfbild erst nach dem Anhalten
+                }
+            }
             ("allcuts", 5) => {
                 self.plan.mode = discslim::engine::plan::Mode::Reauthor;
                 if let Some(d) = self.disc.clone() {

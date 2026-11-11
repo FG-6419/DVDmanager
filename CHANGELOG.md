@@ -2,6 +2,10 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.010 · 2026-11-11 10:44
+
+- „Übergang anhören“ sprang nur an den Anfang des Titels. Sprungstelle und Start gingen an die alte Vorschau und beim Neuladen verloren. Jetzt spielt der Knopf wie gedacht 2,5 s vor bis 2,5 s nach der Schnittstelle und hält dann an.
+
 ## 1.0.009 · 2026-11-11 10:24
 
 - Mini-Blende: Der Ton wird an jeder Schnittstelle 15 ms weich aus- und eingeblendet, damit der harte Übergang zwischen zwei Szenen nicht knackt. Abschaltbar im Backup-Dialog.

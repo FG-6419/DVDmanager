@@ -113,6 +113,24 @@ impl PreviewState {
         self.set_playing(true);
     }
 
+    /// Nur für Prüfläufe: Zustand der Wiedergabe als Text.
+    #[cfg(debug_assertions)]
+    pub fn dev_status(&self) -> String {
+        format!(
+            "abschnitt={} zeit={:?} bild={} spielt={} anhalten_bei={:?}",
+            self.prog_cur,
+            self.time_ms,
+            self.has_frame,
+            self.playing,
+            self.listen_until.map(|l| (l.0, l.1))
+        )
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn is_playing(&self) -> bool {
+        self.playing
+    }
+
     pub fn stop(&mut self) {
         self.handle = None;
         self.segments.clear();
@@ -449,7 +467,6 @@ impl App {
         st.prog_cur = i;
         st.prog_seek = Some((a.2 - LISTEN_MS).max(a.1));
         st.prog_play = Some(true);
-        st.dirty = true;
         let until = (b.1 + LISTEN_MS).min(b.2);
         st.listen_until = Some((i + 1, until, Instant::now() + Duration::from_secs_f64(LISTEN_MS * 2.0 / 1000.0 + 8.0)));
         self.sel = Selection::Entry(i);
@@ -748,7 +765,10 @@ impl App {
                 _ => None,
             }
         };
-        if self.preview.handle.is_some() && self.preview.total_ms > 0 {
+        // Sprünge und Start erst, wenn die richtige Vorschau geladen ist; sonst gingen sie
+        // an die alte und beim Neuladen verloren.
+        let ready = !self.preview.dirty && self.preview.loaded == Some(self.preview_sel());
+        if ready && self.preview.handle.is_some() && self.preview.total_ms > 0 {
             self.preview.set_window(window);
             // Nach dem Wechsel zum nächsten Abschnitt dort weitermachen
             if let Some(t) = self.preview.prog_seek.take() {
