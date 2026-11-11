@@ -1,6 +1,6 @@
 [package]
 name = "dvdmanager"
-version = "1.0.8"
+version = "1.0.9"
 edition = "2021"
 description = "Verkleinert eigene, ungeschuetzte Video-DVDs auf Rohling-Groesse"
 
@@ -16,7 +16,7 @@ path = "src/main.rs"
 eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "persistence", "wayland", "x11"] }
 egui-pop-phosphor = "0.15"
 rfd = "0.18"
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

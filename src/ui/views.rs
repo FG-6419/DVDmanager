@@ -447,6 +447,7 @@ impl App {
         let mut swap = None;
         let mut dup = None;
         let mut split = None;
+        let mut listen = None;
         ScrollArea::vertical().id_salt("neu").max_height(new_h).auto_shrink([false, false]).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
             if self.plan.reauthor.is_empty() {
@@ -523,6 +524,14 @@ impl App {
                         dup = Some(i);
                         ui.close();
                     }
+                    if ui
+                        .add_enabled(i + 1 < n, egui::Button::new(trf!("{}  Übergang zum nächsten anhören", "{}  Listen to the transition to the next", ic::EAR)))
+                        .on_hover_text(tr!("Spielt das Ende dieses und den Anfang des nächsten Eintrags, so wie sie ausgegeben werden", "Plays the end of this entry and the start of the next one, as they will be written"))
+                        .clicked()
+                    {
+                        listen = Some(i);
+                        ui.close();
+                    }
                     let n = e.last_chapter + 1 - e.first_chapter.min(e.last_chapter);
                     if ui
                         .add_enabled(n > 1, egui::Button::new(trf!("{}  In {n} Einzeltitel zerlegen", "{}  Split into {n} separate titles", ic::LIST_BULLETS)))
@@ -550,10 +559,18 @@ impl App {
                 if style::icon_button(ui, &p, ic::COPY, tr!("Eintrag kopieren, samt Schnitt und Einstellungen", "Duplicate entry, including cut and settings")).clicked() {
                     dup = Some(i);
                 }
+                if i + 1 < self.plan.reauthor.len()
+                    && style::icon_button(ui, &p, ic::EAR, tr!("Übergang zum nächsten Eintrag anhören (je 2,5 s davor und danach)", "Listen to the transition to the next entry (2.5 s before and after)")).clicked()
+                {
+                    listen = Some(i);
+                }
                 if style::icon_button(ui, &p, ic::TRASH, tr!("Entfernen", "Remove")).clicked() {
                     remove = Some(i);
                 }
             });
+        }
+        if let Some(i) = listen {
+            self.listen_junction(i);
         }
         if let Some(i) = split {
             if i < self.plan.reauthor.len() {

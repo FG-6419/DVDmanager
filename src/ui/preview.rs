@@ -73,7 +73,12 @@ pub struct PreviewState {
     prog_reverse: Option<f64>,
     /// Nur für Prüfbilder: Knopf gilt als gehalten
     dev_hold: bool,
+    /// Übergang anhören: anhalten, sobald Abschnitt k die Zeit t erreicht (spätestens bis dann)
+    pub listen_until: Option<(usize, f64, Instant)>,
 }
+
+/// Wie lange vor und nach einer Schnittstelle beim Anhören gespielt wird.
+pub const LISTEN_MS: f64 = 2_500.0;
 
 impl PreviewState {
     /// Zeit des Bildes, das gerade zu sehen ist.
@@ -434,6 +439,22 @@ impl App {
         self.sel
     }
 
+    /// Spielt den Übergang von Eintrag `i` zum nächsten: das Ende von `i` und den Anfang
+    /// von `i + 1`, so wie sie ausgegeben werden, und hält danach an.
+    pub(super) fn listen_junction(&mut self, i: usize) {
+        self.update_program();
+        let (Some(a), Some(b)) = (self.preview.prog.get(i).copied(), self.preview.prog.get(i + 1).copied()) else { return };
+        let st = &mut self.preview;
+        st.program = true;
+        st.prog_cur = i;
+        st.prog_seek = Some((a.2 - LISTEN_MS).max(a.1));
+        st.prog_play = Some(true);
+        st.dirty = true;
+        let until = (b.1 + LISTEN_MS).min(b.2);
+        st.listen_until = Some((i + 1, until, Instant::now() + Duration::from_secs_f64(LISTEN_MS * 2.0 / 1000.0 + 8.0)));
+        self.sel = Selection::Entry(i);
+    }
+
     /// Abschnitte für "Alle Schnitte" aus der Liste der neuen DVD.
     pub(super) fn update_program(&mut self) {
         let Some(disc) = self.disc.clone() else { return };
@@ -564,6 +585,15 @@ impl App {
             }
         };
         let st = &mut self.preview;
+        // Übergang anhören: kurz nach der Schnittstelle anhalten
+        if let Some((k, t, deadline)) = st.listen_until {
+            if Instant::now() > deadline || !st.program {
+                st.listen_until = None;
+            } else if st.playing && (st.prog_cur > k || (st.prog_cur == k && st.has_frame && st.current_f() >= t)) {
+                st.set_playing(false);
+                st.listen_until = None;
+            }
+        }
         let Some(handle) = st.handle.as_ref() else { return };
         if compressed_changed {
             let _ = handle.cmd.send(preview::PreviewCmd::Compression(st.last_opts));

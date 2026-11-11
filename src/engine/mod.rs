@@ -6,6 +6,7 @@ pub mod author;
 pub mod backup;
 pub mod batch;
 pub mod cut;
+pub mod inspect;
 pub mod plan;
 pub mod preview;
 pub mod project;

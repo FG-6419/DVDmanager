@@ -2,6 +2,14 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.009 · 2026-11-11 10:24
+
+- Mini-Blende: Der Ton wird an jeder Schnittstelle 15 ms weich aus- und eingeblendet, damit der harte Übergang zwischen zwei Szenen nicht knackt. Abschaltbar im Backup-Dialog.
+- Übergang anhören: Neuer Knopf (Ohr) unter der Liste „Neue DVD“ und im Rechtsklick-Menü. Spielt je 2,5 s vor und nach der Schnittstelle zum nächsten Eintrag und hält danach an.
+- Ausgabe prüfen: Nach dem Backup wird die Ausgabe gelesen und auf beschädigte Tonrahmen und Zeitsprünge im Ton untersucht. Das Ergebnis steht im Abschlussfenster, mit den Stellen im Film.
+- Übersichtsbild: Auf Wunsch entsteht neben der Ausgabe eine JPG-Datei mit Vorschaubildern im einstellbaren Zeitabstand (Raster mit vier Spalten, Zeitangabe je Bild).
+- Schnitt: Liegt der Ton einer DVD weit hinter dem Bild, begann der Ton des nächsten Eintrags bis zu 0,1 s zu früh. Behoben.
+
 ## 1.0.008 · 2026-11-10 19:49
 
 - Knacken im Ton an Schnittstellen behoben (vor allem in Kodi hörbar): Am Anfang und Ende jedes Eintrags blieben angeschnittene Tonrahmen stehen. Sie werden jetzt aus den Paketen entfernt, der Ton beginnt und endet mit vollständigen Rahmen (AC-3 und MPEG-Ton).

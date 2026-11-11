@@ -330,6 +330,17 @@ impl App {
                     }
                 }
             }
+            if self.plan.mode == Mode::Reauthor || matches!(dlg.kind, OutputKind::Vob | OutputKind::Mpeg) {
+                style::check(ui, &p, &mut self.prefs.declick, tr!("Ton an Schnittstellen ganz kurz weich blenden (gegen Knacken)", "Briefly soften the audio at cut points (prevents clicks)"));
+            }
+            style::check(ui, &p, &mut self.prefs.verify, tr!("Ausgabe danach prüfen (Tonrahmen und Zeitstempel)", "Check the output afterwards (audio frames and timestamps)"));
+            ui.horizontal(|ui| {
+                style::check(ui, &p, &mut self.prefs.sheet, tr!("Übersichtsbild als JPG speichern, ein Bild alle", "Save an overview JPG, one picture every"));
+                ui.add_enabled(
+                    self.prefs.sheet,
+                    egui::DragValue::new(&mut self.prefs.sheet_secs).range(5..=3600).speed(1.0).suffix(tr!(" s", " s")),
+                );
+            });
             if matches!(dlg.kind, OutputKind::Iso | OutputKind::Folder) {
                 style::check(ui, &p, &mut dlg.no_split, tr!("VOB-Dateien in voller Länge, nicht in 1-GB-Teile zerlegen", "Keep VOB files in full length, do not split into 1 GB parts"));
                 if dlg.no_split {
@@ -562,6 +573,10 @@ impl App {
             plan.split_vob = !dlg.no_split || dlg.kind == OutputKind::Burn;
             plan
         };
+        let mut plan = plan;
+        plan.declick = self.prefs.declick;
+        plan.verify = self.prefs.verify;
+        plan.sheet_secs = self.prefs.sheet.then_some(self.prefs.sheet_secs.max(1));
         (output, plan)
     }
 
@@ -647,10 +662,71 @@ impl App {
                 if s.burn_started {
                     ui.label(RichText::new(tr!("Der Windows-Brenner wurde geöffnet.", "The Windows disc burner has been opened.")).color(p.muted));
                 }
+                if let Some(c) = &s.check {
+                    ui.add_space(4.0);
+                    let places = |v: &[f64]| {
+                        let mut t: Vec<String> = v.iter().take(6).map(|s| fmt_time((s * 1000.0) as u64)).collect();
+                        if v.len() > 6 {
+                            t.push("…".into());
+                        }
+                        t.join(", ")
+                    };
+                    if c.is_clean() {
+                        ui.label(
+                            RichText::new(trf!(
+                                "{}  Ausgabe geprüft ({}): Ton sauber, keine beschädigten Tonrahmen, keine Zeitsprünge.", "{}  Output checked ({}): audio clean, no damaged audio frames, no time jumps.",
+                                ic::CHECK,
+                                fmt_time((c.seconds * 1000.0) as u64)
+                            ))
+                            .size(13.5)
+                            .color(p.good),
+                        );
+                    } else {
+                        if !c.audio_breaks.is_empty() {
+                            ui.label(
+                                RichText::new(trf!(
+                                    "{}  {}, bei {}", "{}  {}, at {}",
+                                    ic::WARNING,
+                                    discslim::i18n::count(c.audio_breaks.len(), "beschädigte Tonstelle", "beschädigte Tonstellen", "damaged audio spot", "damaged audio spots"),
+                                    places(&c.audio_breaks)
+                                ))
+                                .size(13.5)
+                                .color(p.warn),
+                            );
+                        }
+                        if !c.time_jumps.is_empty() {
+                            ui.label(
+                                RichText::new(trf!(
+                                    "{}  {} im Ton, bei {}", "{}  {} in the audio, at {}",
+                                    ic::WARNING,
+                                    discslim::i18n::count(c.time_jumps.len(), "Zeitsprung", "Zeitsprünge", "time jump", "time jumps"),
+                                    places(&c.time_jumps)
+                                ))
+                                .size(13.5)
+                                .color(p.warn),
+                            );
+                        }
+                    }
+                }
+                if let Some(sheet) = &s.sheet {
+                    ui.label(
+                        RichText::new(trf!("{}  Übersichtsbild: {}", "{}  Overview picture: {}", ic::IMAGE, sheet.display()))
+                            .size(13.0)
+                            .color(p.muted),
+                    );
+                }
+                if let Some(e) = &s.extra_error {
+                    ui.label(RichText::new(format!("{}  {e}", ic::INFO)).size(13.0).color(p.warn));
+                }
                 ui.add_space(10.0);
                 ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
                     if primary_button(ui, &p, tr!("Schließen", "Close"), true).clicked() {
                         close = true;
+                    }
+                    if let Some(sheet) = &s.sheet {
+                        if soft_button(ui, &p, &trf!("{}  Übersichtsbild öffnen", "{}  Open overview picture", ic::IMAGE)).clicked() {
+                            let _ = std::process::Command::new("explorer").arg(sheet).spawn();
+                        }
                     }
                     if soft_button(ui, &p, &trf!("{}  Im Explorer zeigen", "{}  Show in Explorer", ic::FOLDER_OPEN)).clicked() {
                         open_at = Some(s.path.clone());

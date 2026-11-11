@@ -144,6 +144,11 @@ pub struct Prefs {
     pub save_dir: String,
     /// Ordner für Projektdateien (Öffnen und Speichern)
     pub project_dir: String,
+    /// Ton an Schnittstellen kurz blenden, Ausgabe prüfen, Übersichtsbild und sein Bildabstand
+    pub declick: bool,
+    pub verify: bool,
+    pub sheet: bool,
+    pub sheet_secs: u32,
 }
 
 impl Default for Prefs {
@@ -172,6 +177,10 @@ impl Default for Prefs {
             load_dir: String::new(),
             save_dir: String::new(),
             project_dir: String::new(),
+            declick: true,
+            verify: true,
+            sheet: false,
+            sheet_secs: 60,
         }
     }
 }
@@ -296,10 +305,16 @@ impl App {
                 ("compressed", &mut prefs.compressed),
                 ("cut_view", &mut prefs.cut_view),
                 ("cut_exact", &mut prefs.cut_exact),
+                ("declick", &mut prefs.declick),
+                ("verify", &mut prefs.verify),
+                ("sheet", &mut prefs.sheet),
             ] {
                 if let Some(v) = flag(key) {
                     *slot = v;
                 }
+            }
+            if let Some(v) = st.get_string("sheet_secs").and_then(|v| v.parse().ok()) {
+                prefs.sheet_secs = v;
             }
             if let Some(v) = st.get_string("target") {
                 prefs.target_kind = match v.as_str() {
@@ -1102,6 +1117,28 @@ impl App {
                 self.sel = Selection::Entry(0);
                 self.preview.dirty = true;
             }
+            // Ergebnisfenster mit Prüfung und Übersichtsbild (sauber bzw. mit Fund)
+            ("result" | "resultbad", 5) => {
+                let bad = state == "resultbad";
+                let check = discslim::engine::inspect::CheckReport {
+                    audio_breaks: if bad { vec![83.2, 1245.0] } else { Vec::new() },
+                    time_jumps: if bad { vec![1245.0] } else { Vec::new() },
+                    seconds: 1830.0,
+                    tracks: 1,
+                };
+                self.result = Some(JobResult::Ok(BackupSummary {
+                    path: PathBuf::from(r"D:\Filme\Szenen.mpg"),
+                    sectors: 900_000,
+                    target_sectors: u64::MAX,
+                    source_sectors: 1_400_000.0,
+                    seconds: 95.0,
+                    fits: true,
+                    burn_started: false,
+                    check: Some(check),
+                    sheet: Some(PathBuf::from(r"D:\Filme\Szenen.jpg")),
+                    extra_error: None,
+                }));
+            }
             _ => {}
         }
     }
@@ -1280,9 +1317,13 @@ impl eframe::App for App {
             ("compressed", self.preview.compressed),
             ("cut_view", self.preview.cut_view),
             ("cut_exact", p.cut_exact),
+            ("declick", p.declick),
+            ("verify", p.verify),
+            ("sheet", p.sheet),
         ] {
             storage.set_string(key, flag(v));
         }
+        storage.set_string("sheet_secs", p.sheet_secs.to_string());
         storage.set_string(
             "target",
             match kind {

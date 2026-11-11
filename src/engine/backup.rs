@@ -18,6 +18,7 @@ use crate::engine::plan::{
     ifo_overhead, CellDecision, Estimate, Mode, Plan, ReauthorEntry, VideoMode, SAFETY, STILL_RATIO,
 };
 use crate::engine::cut::{entry_stream, StreamEvent};
+use crate::engine::inspect::{inspect, CheckReport, InspectOpts};
 use crate::engine::transcode::{copy_raw, patch_nav, transcode_vobu, Retimer, SpaceWriter, VobuReader};
 use crate::dvd::ifo::encode_time;
 use crate::dvd::vob::DSI_OFF;
@@ -67,6 +68,82 @@ pub struct BackupSummary {
     pub seconds: f64,
     pub fits: bool,
     pub burn_started: bool,
+    /// Prüfung der Ausgabe, falls gewünscht
+    pub check: Option<CheckReport>,
+    /// Gespeichertes Übersichtsbild
+    pub sheet: Option<PathBuf>,
+    /// Hinweis, wenn Prüfung oder Übersichtsbild nicht geklappt haben
+    pub extra_error: Option<String>,
+}
+
+/// Ergebnis von Prüfung und Übersichtsbild.
+#[derive(Default)]
+struct PostResult {
+    check: Option<CheckReport>,
+    sheet: Option<PathBuf>,
+    error: Option<String>,
+}
+
+/// Liest die fertige Ausgabe noch einmal: Prüfung und Übersichtsbild.
+fn post_process(plan: &Plan, groups: &[Vec<PathBuf>], continuous: bool, sheet_path: PathBuf, tx: &Sender<BackupMsg>, cancel: &AtomicBool) -> PostResult {
+    let sheet = plan.sheet_secs.map(|s| (s, sheet_path));
+    if !plan.verify && sheet.is_none() {
+        return PostResult::default();
+    }
+    let stage = match (plan.verify, sheet.is_some()) {
+        (true, true) => tr!("Ausgabe prüfen und Übersichtsbild erstellen", "Checking output and creating overview picture"),
+        (true, false) => tr!("Ausgabe prüfen", "Checking output"),
+        _ => tr!("Übersichtsbild erstellen", "Creating overview picture"),
+    };
+    let _ = tx.send(BackupMsg::Stage(stage.into()));
+    let opts = InspectOpts { verify: plan.verify, continuous, sheet };
+    let mut last = Instant::now();
+    let mut progress = |f: f32| {
+        if last.elapsed().as_millis() > 200 {
+            last = Instant::now();
+            let _ = tx.send(BackupMsg::Progress { fraction: f, sectors_out: 0, ratio_in: 1.0, current: stage.into() });
+        }
+        !cancel.load(Ordering::Relaxed)
+    };
+    match inspect(groups, &opts, &mut progress) {
+        Ok((check, sheet)) => PostResult { check, sheet, error: None },
+        Err(e) if cancel.load(Ordering::Relaxed) => {
+            let _ = e;
+            PostResult { error: Some(tr!("Prüfung abgebrochen; die Ausgabe ist vollständig.", "Check cancelled; the output is complete.").into()), ..Default::default() }
+        }
+        Err(e) => PostResult { error: Some(e), ..Default::default() },
+    }
+}
+
+/// Titelsets eines VIDEO_TS-Ordners: je Titelset die VOB-Dateien des Films (ohne Menü).
+fn title_vobs(video_dir: &Path) -> Vec<Vec<PathBuf>> {
+    let mut sets: std::collections::BTreeMap<String, Vec<PathBuf>> = Default::default();
+    if let Ok(rd) = std::fs::read_dir(video_dir) {
+        for ent in rd.flatten() {
+            let name = ent.file_name().to_string_lossy().to_ascii_uppercase();
+            // VTS_01_1.VOB bis VTS_01_9.VOB; _0 ist das Menü
+            if name.len() == 12 && name.starts_with("VTS_") && name.ends_with(".VOB") && &name[7..8] != "0" {
+                sets.entry(name[4..6].to_string()).or_default().push(ent.path());
+            }
+        }
+    }
+    sets.into_values()
+        .map(|mut v| {
+            v.sort();
+            v
+        })
+        .collect()
+}
+
+/// Übersichtsbild neben der Ausgabe: gleicher Name, Endung .jpg.
+fn sheet_path_for(output: &Output) -> PathBuf {
+    match output {
+        Output::Folder(p) => {
+            let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "DVD".into());
+            p.with_file_name(format!("{name}.jpg"))
+        }
+        Output::Iso(p) | Output::Burn(p) | Output::Vob(p) | Output::Mpeg { path: p, .. } => p.with_extension("jpg"),
+    }
 }
 
 /// Führt Buch, damit die Automatik den Rest passend verteilt.
@@ -449,7 +526,7 @@ fn author_entry(
         }
     };
 
-    entry_stream(disc, entry, |ev| {
+    entry_stream(disc, entry, plan.declick, |ev| {
         ctx.check()?;
         let item = match ev {
             StreamEvent::Skipped(n) => {
@@ -635,7 +712,7 @@ fn run_vob(disc: &Disc, plan: &Plan, path: &Path, ctx: &mut Ctx, mpeg: Option<Op
         let mut last_src_vob = None;
         let _ = (t, v);
 
-        entry_stream(disc, entry, |ev| {
+        entry_stream(disc, entry, plan.declick, |ev| {
             ctx.check()?;
             let item = match ev {
                 StreamEvent::Skipped(n) => {
@@ -840,6 +917,7 @@ fn run_inner(req: &BackupRequest, tx: &Sender<BackupMsg>, cancel: &AtomicBool) -
                 return Err(e);
             }
         };
+        let post = post_process(&req.plan, &[vec![path.clone()]], true, sheet_path_for(&req.output), tx, cancel);
         return Ok(BackupSummary {
             path: path.clone(),
             sectors,
@@ -848,6 +926,9 @@ fn run_inner(req: &BackupRequest, tx: &Sender<BackupMsg>, cancel: &AtomicBool) -
             seconds: started.elapsed().as_secs_f64(),
             fits: sectors <= req.plan.target_sectors,
             burn_started: false,
+            check: post.check,
+            sheet: post.sheet,
+            extra_error: post.error,
         });
     }
 
@@ -917,6 +998,8 @@ fn run_inner(req: &BackupRequest, tx: &Sender<BackupMsg>, cancel: &AtomicBool) -
         finish(&temp_dir);
         return Err(trf!("Das Ergebnis lässt sich nicht lesen: {e}", "The result cannot be read: {e}"));
     }
+    // Prüfung und Übersichtsbild, solange die Dateien noch einzeln vorliegen (vor dem ISO)
+    let post = post_process(&req.plan, &title_vobs(&video_dir), false, sheet_path_for(&req.output), tx, cancel);
 
     let mut burn_started = false;
     if is_iso {
@@ -952,6 +1035,9 @@ fn run_inner(req: &BackupRequest, tx: &Sender<BackupMsg>, cancel: &AtomicBool) -
         seconds: started.elapsed().as_secs_f64(),
         fits: sectors <= req.plan.target_sectors,
         burn_started,
+        check: post.check,
+        sheet: post.sheet,
+        extra_error: post.error,
     })
 }
 

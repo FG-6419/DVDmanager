@@ -279,7 +279,16 @@ pub struct Plan {
     pub split_vob: bool,
     /// Bildmodus für alles, was noch nicht eigens eingestellt ist (Standard: Original).
     pub default_video: VideoMode,
+    /// Ton an jeder Schnittstelle ganz kurz aus- und einblenden, damit es nicht knackt.
+    pub declick: bool,
+    /// Ausgabe danach auf beschädigte Tonrahmen und Zeitsprünge prüfen.
+    pub verify: bool,
+    /// Übersichtsbild (JPG) der Ausgabe: Abstand der Vorschaubilder in Sekunden.
+    pub sheet_secs: Option<u32>,
 }
+
+/// Länge der Ton-Blende an Schnittstellen (je Seite).
+pub const DECLICK_MS: f64 = 15.0;
 
 /// Eine einmal aufgelöste Entscheidung für eine Zelle.
 #[derive(Clone, Copy, Debug)]
@@ -359,6 +368,9 @@ impl Plan {
             region_free: false,
             split_vob: true,
             default_video: VideoMode::Keep,
+            declick: true,
+            verify: true,
+            sheet_secs: None,
         }
     }
 

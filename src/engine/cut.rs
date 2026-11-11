@@ -8,7 +8,7 @@ use crate::dvd::source::Space;
 use crate::dvd::vob::*;
 use crate::dvd::{be32, put16, put32, Res, SECTOR};
 use crate::engine::audiofade::{fade_audio, FadeVobu};
-use crate::engine::plan::{FadeKind, ReauthorEntry};
+use crate::engine::plan::{FadeKind, ReauthorEntry, DECLICK_MS};
 use crate::engine::splice::{append_tail_audio, AudioSplicer};
 use crate::engine::transcode::VobuReader;
 use crate::mpeg2::bits::next_start_code;
@@ -324,15 +324,17 @@ pub enum StreamEvent<'a> {
 
 /// Liefert alle VOBUs eines Eintrags in Abspielreihenfolge, schon geschnitten. Der Ton
 /// beginnt und endet dabei mit vollständigen Rahmen (siehe `splice`).
+/// `declick`: Ton am Anfang und Ende ganz kurz ein- bzw. ausblenden (`DECLICK_MS`).
 pub fn entry_stream<'a>(
     disc: &'a Disc,
     entry: &ReauthorEntry,
+    declick: bool,
     mut sink: impl FnMut(StreamEvent<'a>) -> Res<()>,
 ) -> Res<()> {
     let mut splicer = AudioSplicer::default();
     let mut held: Option<EntryVobu<'a>> = None;
     let mut after: Option<Vec<u8>> = None;
-    entry_stream_raw(disc, entry, &mut after, |ev| match ev {
+    entry_stream_raw(disc, entry, declick, &mut after, |ev| match ev {
         StreamEvent::Vobu(v) => {
             let mut v = v;
             let data = std::mem::take(&mut v.data);
@@ -360,6 +362,7 @@ pub fn entry_stream<'a>(
 fn entry_stream_raw<'a>(
     disc: &'a Disc,
     entry: &ReauthorEntry,
+    declick: bool,
     after: &mut Option<Vec<u8>>,
     mut sink: impl FnMut(StreamEvent<'a>) -> Res<()>,
 ) -> Res<()> {
@@ -380,7 +383,22 @@ fn entry_stream_raw<'a>(
     // reichen und der Ton gegenüber dem Bild versetzt gemultiplext ist.
     const AUDIO_MARGIN_MS: f64 = 1_500.0;
     let mut held: Vec<(EntryVobu<'a>, f64, u32)> = Vec::new();
-    let audio_gain = move |t: f64| fades.at(t, vis_start, vis_end).map(|(a, _)| a).unwrap_or(1.0);
+    let fade_audio_on = fades.is_active() && fades.audio;
+    // Tatsächlicher Anfang und Ende der Ausgabe: Beim Schnitt am Schlüsselbild beginnt sie
+    // vor der Schnittmarke und endet dahinter. Werden beim Durchlauf gesetzt.
+    let out_start = std::cell::Cell::new(f64::NAN);
+    let out_end = std::cell::Cell::new(vis_end);
+    let audio_gain = |t: f64| {
+        let mut g = if fade_audio_on { fades.at(t, vis_start, vis_end).map(|(a, _)| a).unwrap_or(1.0) } else { 1.0 };
+        if declick {
+            // Kurze Rampe an beiden Rändern: kein harter Sprung im Ton an der Schnittstelle
+            let start = if out_start.get().is_nan() { vis_start } else { out_start.get() };
+            let up = ((t - start) / DECLICK_MS).clamp(0.0, 1.0);
+            let down = ((out_end.get() - t) / DECLICK_MS).clamp(0.0, 1.0);
+            g *= up.min(down) as f32;
+        }
+        g
+    };
     let mut cell_base = 0u64;
     let mut out_t = 0u64;
     let mut prev: Option<Vec<u8>> = None;
@@ -455,16 +473,23 @@ fn entry_stream_raw<'a>(
                     }
                 }
                 let rebuilt = item.is_some();
+                if out_start.get().is_nan() {
+                    out_start.set(if head && rebuilt { cut_in as f64 } else { t0 as f64 });
+                }
+                out_end.set(if tail && rebuilt { cut_out as f64 } else { t1 as f64 });
                 let mut out = item.unwrap_or_else(|| data.clone());
                 if first_kept && !rebuilt {
                     mark_broken_link(&mut out);
                 }
                 first_kept = false;
                 let dur_out = if rebuilt { vobu_dur_ms(&out) } else { dur };
-                let audio_zone = fades.is_active()
-                    && fades.audio
-                    && ((fades.fade_in != FadeKind::None && (t0 as f64) < vis_start + fade_len + AUDIO_MARGIN_MS)
-                        || (fades.fade_out != FadeKind::None && (t1 as f64) > vis_end - fade_len - AUDIO_MARGIN_MS));
+                let edge_zone = declick
+                    && ((t0 as f64) < vis_start + DECLICK_MS + AUDIO_MARGIN_MS
+                        || (t1 as f64) > vis_end - DECLICK_MS - AUDIO_MARGIN_MS);
+                let audio_zone = edge_zone
+                    || (fade_audio_on
+                        && ((fades.fade_in != FadeKind::None && (t0 as f64) < vis_start + fade_len + AUDIO_MARGIN_MS)
+                            || (fades.fade_out != FadeKind::None && (t1 as f64) > vis_end - fade_len - AUDIO_MARGIN_MS)));
                 if !audio_zone {
                     flush_held(&mut held, &audio_gain, &mut sink)?;
                 }

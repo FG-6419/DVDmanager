@@ -30,12 +30,12 @@ fn open_analysed(path: &Path) -> Disc {
     d
 }
 
-fn run_backup(disc: Disc, plan: Plan, output: Output) {
+fn run_backup(disc: Disc, plan: Plan, output: Output) -> discslim::engine::backup::BackupSummary {
     let (tx, rx) = channel();
     run(BackupRequest { disc: Arc::new(disc), plan, output, deep_analysis: false }, tx, Arc::new(AtomicBool::new(false)));
     for m in rx.iter() {
         match m {
-            BackupMsg::Done(_) => return,
+            BackupMsg::Done(s) => return s,
             BackupMsg::Failed(e) => panic!("Backup fehlgeschlagen: {e}"),
             BackupMsg::Cancelled => panic!("abgebrochen"),
             _ => {}
@@ -266,6 +266,11 @@ fn fades_at_cut_points() {
         let a_end = level(len - 100.0, len);
         println!("Ton: Anfang {a_first:.0}, 0,6-0,8 s {a_ramp:.0}, Mitte {a_mid:.0}, Ende {a_end:.0}");
         assert!(a_mid > 2_500.0, "Ton in der Mitte zu leise: {a_mid}");
+        // Mini-Blende: Das allererste Tonpaket (etwa 10 ms) beginnt weich, gleich danach volle Lautstärke.
+        let a_click = level(-50.0, 12.0);
+        let a_after = level(30.0, 100.0);
+        println!("Mini-Blende: erstes Paket {a_click:.0}, danach {a_after:.0}");
+        assert!(a_click < a_mid * 0.8, "Ton beginnt hart: {a_click}");
         if !exact {
             // Schnitt an Bildgruppen: eingestellte Blenden wirken nicht, nichts wird neu kodiert
             assert!(first > 40.0 && end < 200.0, "Blende trotz Schnitt an Bildgruppen: {first} / {end}");
@@ -451,6 +456,35 @@ fn mpeg_timestamps_continuous() {
     }
 }
 
+#[test]
+fn output_check_and_overview_picture() {
+    let w = work("pruefung_bild");
+    let src = demo::build_sample(&w, |_| {}).unwrap();
+    let disc = open_analysed(&src);
+    for (name, output) in [
+        ("datei", Output::Mpeg { path: w.join("film.mpg"), audio: None }),
+        ("ordner", Output::Folder(w.join("Neue DVD"))),
+    ] {
+        let mut plan = Plan::new(NO_TARGET);
+        plan.mode = Mode::Reauthor;
+        for t in 0..2 {
+            let mut e = ReauthorEntry::new(t, 0, disc.titles[t].chapters.len() - 1, ItemSettings::default());
+            e.cut = Cut { start_ms: Some(1_000), end_ms: Some(9_000), exact: true };
+            plan.reauthor.push(e);
+        }
+        plan.sheet_secs = Some(3);
+        let s = run_backup(open_analysed(&src), plan, output);
+        let check = s.check.expect("Prüfung fehlt");
+        println!("{name}: {check:?} {:?} {:?}", s.sheet, s.extra_error);
+        assert!(check.is_clean(), "{name}: {check:?}");
+        assert!((check.seconds - 16.0).abs() < 1.5, "{name}: geprüfte Länge {}", check.seconds);
+        let sheet = s.sheet.expect("Übersichtsbild fehlt");
+        let img = image::open(&sheet).unwrap();
+        // 16 s, alle 3 s ein Bild: 5 bis 6 Bilder, also zwei Reihen zu je vier
+        assert!(img.width() > 1000 && img.height() > 300, "{name}: {}x{}", img.width(), img.height());
+    }
+}
+
 /// Tonströme einer MPEG-Datei: Spur -> (Nutzdaten, Zeitstempel je Paket als (Lage, PTS)).
 fn audio_streams(data: &[u8]) -> Vec<(u8, discslim::engine::audio::Codec, Vec<u8>, Vec<(usize, u64)>)> {
     use discslim::engine::audio::Codec;
@@ -547,7 +581,15 @@ fn real_disc_audio_splices() {
             plan.reauthor.push(e);
         }
         let out = w.join(format!("schnitt_{exact}.mpg"));
-        run_backup(open_analysed(Path::new(&iso)), plan, Output::Mpeg { path: out.clone(), audio: None });
+        plan.sheet_secs = Some(5);
+        let summary = run_backup(open_analysed(Path::new(&iso)), plan, Output::Mpeg { path: out.clone(), audio: None });
+        // Die eingebaute Prüfung muss dasselbe sagen wie die Prüfung hier unten.
+        let check = summary.check.expect("Prüfung");
+        println!("bildgenau={exact} Prüfung: {check:?}, Übersichtsbild {:?}", summary.sheet);
+        if !check.is_clean() {
+            failures.push(format!("bildgenau={exact}: eingebaute Prüfung meldet {check:?}"));
+        }
+        assert!(summary.sheet.as_ref().is_some_and(|p| image::open(p).is_ok()), "kein Übersichtsbild");
         let data = std::fs::read(&out).unwrap();
         for (id, codec, es, _) in audio_streams(&data) {
             let bad = audio_garbage(&es, codec);

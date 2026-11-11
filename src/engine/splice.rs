@@ -85,8 +85,11 @@ fn gather(data: &[u8], pieces: &[Piece]) -> Vec<u8> {
 pub struct AudioSplicer {
     held: Option<Vec<u8>>,
     state: Vec<(u8, State)>,
-    /// Die zurückgehaltene VOBU ist die erste des Eintrags.
-    held_first: bool,
+    /// Bildanfang des Eintrags (aus der ersten VOBU)
+    start_ptm: Option<i64>,
+    /// Spuren, die schon Ton ab dem Bildanfang geliefert haben. Liegt der Ton im Datenstrom
+    /// weit hinter dem Bild, enthält die erste VOBU noch keinen; dann gilt der Anfang weiter.
+    started: Vec<u8>,
 }
 
 /// Anfangs- und Endzeit des Bildes einer VOBU laut Navigationspaket (90 kHz).
@@ -176,13 +179,11 @@ impl AudioSplicer {
     /// Nimmt die nächste VOBU an und gibt die vorige bereinigt zurück.
     pub fn push(&mut self, data: Vec<u8>) -> Option<Vec<u8>> {
         let Some(mut prev) = self.held.replace(data) else {
-            self.held_first = true;
+            self.start_ptm = self.held.as_deref().and_then(|d| vobu_ptm(d).0);
             return None;
         };
-        let start = if self.held_first { vobu_ptm(&prev).0 } else { None };
-        self.held_first = false;
         let next = self.held.take();
-        self.clean(&mut prev, next.as_deref(), start, None);
+        self.clean(&mut prev, next.as_deref(), None);
         self.held = next;
         Some(prev)
     }
@@ -190,11 +191,11 @@ impl AudioSplicer {
     /// Ende des Eintrags: Die letzte VOBU verliert einen angefangenen Rahmen.
     pub fn finish(&mut self) -> Option<Vec<u8>> {
         let mut last = self.held.take()?;
-        let (s, e) = vobu_ptm(&last);
-        let start = if self.held_first { s } else { None };
-        self.clean(&mut last, None, start, e);
+        let e = vobu_ptm(&last).1;
+        self.clean(&mut last, None, e);
         self.state.clear();
-        self.held_first = false;
+        self.started.clear();
+        self.start_ptm = None;
         Some(last)
     }
 
@@ -209,10 +210,11 @@ impl AudioSplicer {
         }
     }
 
-    /// `start`/`end`: Bildanfang bzw. -ende des Eintrags, falls er in dieser VOBU liegt.
-    fn clean(&mut self, cur: &mut [u8], next: Option<&[u8]>, start: Option<i64>, end: Option<i64>) {
+    /// `end`: Bildende des Eintrags, falls es in dieser VOBU liegt.
+    fn clean(&mut self, cur: &mut [u8], next: Option<&[u8]>, end: Option<i64>) {
         let next_pieces = next.map(audio_pieces).unwrap_or_default();
         for (key, codec, pieces) in audio_pieces(cur) {
+            let start = if self.started.contains(&key) { None } else { self.start_ptm };
             let es_cur = gather(cur, &pieces);
             let b = es_cur.len();
             let mut all = es_cur;
@@ -227,6 +229,10 @@ impl AudioSplicer {
                 if remove.iter().any(|r| r.1 > b) {
                     self.set_state(key, State::Resync);
                 }
+            }
+            // Ein Rahmen ist geblieben: Ab jetzt läuft der Ton dieser Spur ab dem Bildanfang.
+            if frames.iter().any(|f| !remove.iter().any(|r| r.0 <= *f && *f < r.1)) {
+                self.started.push(key);
             }
             if !remove.is_empty() {
                 let dur = frames.first().and_then(|f| frame_ticks(&all[*f..], codec));
@@ -337,7 +343,7 @@ fn scan(all: &[u8], b: usize, codec: Codec, state: State, more: bool) -> (Vec<(u
 
 /// Was bei allen Rahmen einer DVD-Tonspur gleich ist: AC-3 Abtastrate, Datenrate und
 /// Version; MPEG-Ton Version, Schicht, Datenrate, Abtastrate und Kanalmodus.
-fn header_key(f: &[u8], codec: Codec) -> [u8; 3] {
+pub(crate) fn header_key(f: &[u8], codec: Codec) -> [u8; 3] {
     match codec {
         Codec::Ac3 => [f[4], f[5], 0],
         _ => [f[1], f[2] & 0xFD, f[3] & 0xC0],
@@ -345,7 +351,7 @@ fn header_key(f: &[u8], codec: Codec) -> [u8; 3] {
 }
 
 /// Dauer eines Rahmens (90 kHz) laut Kopf.
-fn frame_ticks(f: &[u8], codec: Codec) -> Option<i64> {
+pub(crate) fn frame_ticks(f: &[u8], codec: Codec) -> Option<i64> {
     let (samples, rate): (i64, i64) = match codec {
         Codec::Ac3 => (1536, *[48_000, 44_100, 32_000].get(usize::from(*f.get(4)? >> 6))?),
         _ => {
