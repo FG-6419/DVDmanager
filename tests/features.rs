@@ -457,6 +457,92 @@ fn mpeg_timestamps_continuous() {
 }
 
 #[test]
+fn open_single_mpeg_and_vob_files() {
+    use discslim::engine::import::{is_media_path, open_source};
+    let w = work("einzeldatei");
+    let src = demo::build_sample(&w, |_| {}).unwrap();
+    let disc = open_analysed(&src);
+    let t = 0;
+    let make = |exact: bool| {
+        let mut plan = Plan::new(NO_TARGET);
+        plan.mode = Mode::Reauthor;
+        let mut e = ReauthorEntry::new(t, 0, disc.titles[t].chapters.len() - 1, ItemSettings::default());
+        e.cut = Cut { start_ms: Some(3_000), end_ms: Some(23_000), exact };
+        plan.reauthor.push(e);
+        plan.verify = false;
+        plan
+    };
+    let mpg = w.join("film.mpg");
+    let vob = w.join("film.vob");
+    run_backup(open_analysed(&src), make(true), Output::Mpeg { path: mpg.clone(), audio: None });
+    run_backup(open_analysed(&src), make(false), Output::Vob(vob.clone()));
+    for (file, tracks) in [(&mpg, 1usize), (&vob, 2)] {
+        assert!(is_media_path(file));
+        let source = open_source(file, &mut |_, _| true).unwrap();
+        assert_eq!(source.origin, *file);
+        let mut d = Disc::open(source).unwrap();
+        d.analyse(true, &mut |_, _| true).unwrap();
+        assert_eq!(d.titles.len(), 1, "{}", file.display());
+        let ms = d.titles[0].ms;
+        println!("{}: {} ms, {} Tonspuren", file.display(), ms, d.titles[0].audio.len());
+        assert!(ms.abs_diff(20_000) < 1_000, "{}: Länge {ms}", file.display());
+        assert_eq!(d.titles[0].audio.len(), tracks, "{}", file.display());
+
+        // Wieder ausspielen, geschnitten, und prüfen
+        let mut plan = Plan::new(NO_TARGET);
+        plan.mode = Mode::Reauthor;
+        let mut e = ReauthorEntry::new(0, 0, d.titles[0].chapters.len() - 1, ItemSettings::default());
+        e.cut = Cut { start_ms: Some(2_000), end_ms: Some(12_000), exact: true };
+        plan.reauthor.push(e);
+        let out = w.join(format!("wieder_{}.mpg", file.extension().unwrap().to_string_lossy()));
+        let s = run_backup(d, plan, Output::Mpeg { path: out.clone(), audio: None });
+        let check = s.check.unwrap();
+        println!("  wieder ausgespielt: {check:?}");
+        assert!(check.is_clean(), "{check:?}");
+        assert!((check.seconds - 10.0).abs() < 1.0, "Länge {}", check.seconds);
+    }
+    // Eine VOB-Datei in einem DVD-Ordner öffnet weiter die ganze DVD.
+    let in_dvd = src.join("VTS_01_1.VOB");
+    if in_dvd.is_file() {
+        assert!(!is_media_path(&in_dvd));
+    }
+}
+
+/// Echte Einzeldatei: DVDMANAGER_REAL_MEDIA=Pfad cargo test real_media -- --ignored --nocapture
+#[test]
+#[ignore]
+fn real_media_file() {
+    let Ok(path) = std::env::var("DVDMANAGER_REAL_MEDIA") else { return };
+    let t0 = std::time::Instant::now();
+    let source = discslim::engine::import::open_source(Path::new(&path), &mut |_, _| true).unwrap();
+    let mut d = Disc::open(source).unwrap();
+    d.analyse(true, &mut |_, _| true).unwrap();
+    let t = &d.titles[0];
+    println!("{path}: {} ms, Ton {:?}, Kapitel {}, eingelesen in {:.1} s", t.ms, t.audio.iter().map(|a| a.phys).collect::<Vec<_>>(), t.chapters.len(), t0.elapsed().as_secs_f64());
+    let w = work("echte_einzeldatei");
+    let mut plan = Plan::new(NO_TARGET);
+    plan.mode = Mode::Reauthor;
+    // Zwei Ausschnitte, kurz gehalten: bei langen Filmen je 30 bzw. 20 s, bei kurzen Teile der Länge
+    let len = t.ms;
+    let part = |a: f64, b: f64, max: u64| {
+        let s = (len as f64 * a) as u64;
+        (s, ((len as f64 * b) as u64).min(s + max))
+    };
+    let (a1, b1) = part(0.1, 0.45, 30_000);
+    let (a2, b2) = part(0.55, 0.9, 20_000);
+    let mut e = ReauthorEntry::new(0, 0, t.chapters.len() - 1, ItemSettings::default());
+    e.cut = Cut { start_ms: Some(a1), end_ms: Some(b1), exact: true };
+    plan.reauthor.push(e);
+    let mut e2 = ReauthorEntry::new(0, 0, t.chapters.len() - 1, ItemSettings::default());
+    e2.cut = Cut { start_ms: Some(a2), end_ms: Some(b2), exact: false };
+    plan.reauthor.push(e2);
+    plan.sheet_secs = Some(10);
+    let s = run_backup(d, plan, Output::Mpeg { path: w.join("ausschnitt.mpg"), audio: None });
+    println!("Prüfung: {:?}", s.check);
+    assert!(s.check.unwrap().is_clean());
+}
+
+#[test]
 fn output_check_and_overview_picture() {
     let w = work("pruefung_bild");
     let src = demo::build_sample(&w, |_| {}).unwrap();

@@ -23,7 +23,7 @@ struct Vobu {
     cell_elapsed_ms: u64,
 }
 
-fn pack_header(scr: u64) -> [u8; 14] {
+pub(crate) fn pack_header(scr: u64) -> [u8; 14] {
     let mut h = [0u8; 14];
     h[0..4].copy_from_slice(&[0, 0, 1, 0xBA]);
     put_scr(&mut h, scr);
@@ -92,7 +92,7 @@ fn sub_pack(scr: u64, pts: u64, stream: u8) -> [u8; SECTOR] {
     s
 }
 
-fn nav_pack(scr: u64) -> Vec<u8> {
+pub(crate) fn nav_pack(scr: u64) -> Vec<u8> {
     let mut s = vec![0u8; SECTOR];
     s[..14].copy_from_slice(&pack_header(scr));
     let sys: [u8; 24] = [
@@ -523,7 +523,7 @@ fn make_pgc(spec: &TitleSpec, chapter_ms: &[u64], starts: &[u32], cells: &[CellA
     pgc
 }
 
-fn make_tmap(points: &[(u64, u32)]) -> TimeMap {
+pub(crate) fn make_tmap(points: &[(u64, u32)]) -> TimeMap {
     let dur = points.last().map(|p| p.0).unwrap_or(0);
     let unit = ((dur / 1000 / 2040) + 1).clamp(1, 255) as u8;
     let mut entries = Vec::new();

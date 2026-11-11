@@ -302,34 +302,48 @@ fn scan(all: &[u8], b: usize, codec: Codec, state: State, more: bool) -> (Vec<(u
     let mut frames = Vec::new();
     // Ein Rahmen zählt, wenn direkt danach der nächste mit demselben Kopf beginnt oder der
     // Strom dort endet. Der gleiche Kopf schließt zufällige Sync-Muster in den Daten aus.
-    let chained = |p: usize| -> Option<usize> {
+    // `lenient`: Reichen die Daten dahinter nicht zum Prüfen, gilt der Rahmen trotzdem. Das
+    // nur, solange der Strom schon sicher erkannt ist; beim Suchen des ersten Rahmens nicht,
+    // sonst hielte ein zufälliges Sync-Muster mit großer Länge alles Folgende für Inhalt.
+    let chained = |p: usize, lenient: bool, key: Option<[u8; 3]>| -> Option<usize> {
         let l = frame_len(all.get(p..)?, codec).filter(|l| *l > 4)?;
         let e = p + l;
+        let own = (all.len() >= p + 6).then(|| header_key(&all[p..], codec));
+        if key.is_some() && own.is_some() && own != key {
+            return None;
+        }
         if e == all.len() {
-            return Some(l);
+            return (lenient || !more).then_some(l);
         }
         if e > all.len() {
             // Läuft in die nächste VOBU, deren Ton zu kurz ist, um es zu prüfen.
-            return (more && e > b).then_some(l);
+            return (lenient && more && e > b).then_some(l);
         }
-        let same = all.len() >= e + 6 && find_sync(&all[..e + 2], e, codec) == Some(e) && header_key(&all[p..], codec) == header_key(&all[e..], codec);
+        let same = all.len() >= e + 6 && find_sync(&all[..e + 2], e, codec) == Some(e) && own == Some(header_key(&all[e..], codec));
         // Zu wenig Daten hinter dem Rahmen, um den Kopf zu vergleichen
-        let short = all.len() < e + 6 && more;
+        let short = lenient && all.len() < e + 6 && more;
         (same || short).then_some(l)
     };
+    let mut synced = matches!(state, State::Cont(_));
+    let mut key: Option<[u8; 3]> = None;
     let mut pos = match state {
         State::Cont(n) if n >= b => return (remove, frames, State::Cont(n - b)),
         State::Cont(n) => n,
         State::Resync => 0,
     };
     while pos < b {
-        if let Some(l) = chained(pos) {
+        if let Some(l) = chained(pos, synced, key) {
             frames.push(pos);
+            if key.is_none() && all.len() >= pos + 6 {
+                key = Some(header_key(&all[pos..], codec));
+            }
+            synced = true;
             pos += l;
             continue;
         }
+        synced = false;
         let mut q = pos + 1;
-        while q < b && chained(q).is_none() {
+        while q < b && chained(q, false, key).is_none() {
             q += 1;
         }
         remove.push((pos, q.min(b)));

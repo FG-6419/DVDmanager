@@ -99,7 +99,12 @@ impl App {
                     }
 
                     let has_disc = self.disc.is_some();
-                    if has_disc {
+                    if has_disc && self.is_single_file() {
+                        // Einzelne Videodatei: nur Neu zusammenstellen
+                        ui.add_space(14.0);
+                        ui.label(RichText::new(trf!("{}  Einzeldatei", "{}  Single file", ic::FILE_VIDEO)).size(13.0).color(p.muted))
+                            .on_hover_text(tr!("Eine einzelne VOB- oder MPEG-Datei: Schneiden, Zusammenstellen und Ausgeben wie bei einer DVD", "A single VOB or MPEG file: cut, assemble and write it like a DVD"));
+                    } else if has_disc {
                         ui.add_space(14.0);
                         let mut mode = self.plan.mode;
                         let opts = [(Mode::FullDisc, tr!("Ganze DVD", "Whole DVD")), (Mode::Reauthor, tr!("Neu zusammenstellen", "Re-author"))];
@@ -202,7 +207,7 @@ impl App {
         let p = self.pal;
         let drives: Vec<_> = self.drives().to_vec();
         let area = ui.available_rect_before_wrap();
-        let content_w = 760.0f32.min(area.width() - 40.0);
+        let content_w = 920.0f32.min(area.width() - 40.0);
         ui.scope_builder(
             egui::UiBuilder::new().max_rect(Rect::from_center_size(area.center(), Vec2::new(content_w, area.height()))),
             |ui| {
@@ -220,7 +225,7 @@ impl App {
                 });
 
                 let gap = 12.0;
-                let w = (content_w - gap * 2.0) / 3.0;
+                let w = (content_w - gap * 3.0) / 4.0;
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = gap;
                     let has_drive = drives.iter().find(|d| d.2).cloned();
@@ -240,11 +245,14 @@ impl App {
                     if start_card(ui, &p, w, ic::FILE_ARROW_DOWN, tr!("ISO-Abbild", "ISO image"), tr!("Abbilddatei einer DVD", "Image file of a DVD"), true) {
                         self.pick_iso(ctx);
                     }
+                    if start_card(ui, &p, w, ic::FILE_VIDEO, tr!("VOB-/MPEG-Datei", "VOB/MPEG file"), tr!("Einzelne Videodatei schneiden und ausgeben", "Cut and write a single video file"), true) {
+                        self.pick_media(ctx);
+                    }
                 });
 
                 ui.add_space(18.0);
                 ui.vertical_centered(|ui| {
-                    ui.label(RichText::new(tr!("Oder ziehe einen Ordner, eine ISO-Datei oder ein Projekt einfach hierher.", "Or simply drag a folder, an ISO file or a project here.")).color(p.muted));
+                    ui.label(RichText::new(tr!("Oder ziehe einen Ordner, eine ISO-, VOB- oder MPEG-Datei oder ein Projekt einfach hierher.", "Or simply drag a folder, an ISO, VOB or MPEG file or a project here.")).color(p.muted));
                     ui.add_space(10.0);
                     // Drei Knöpfe nebeneinander, mittig
                     let labels = [
@@ -603,7 +611,8 @@ impl App {
         }
 
         ui.separator();
-        group_label(ui, &p, tr!("Titel dieser DVD", "Titles on this DVD"));
+        let heading = if self.is_single_file() { tr!("Inhalt der Datei", "Contents of the file") } else { tr!("Titel dieser DVD", "Titles on this DVD") };
+        group_label(ui, &p, heading);
         ScrollArea::vertical().id_salt("quelle").auto_shrink([false, false]).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
             for (idx, t) in disc.titles.iter().enumerate() {

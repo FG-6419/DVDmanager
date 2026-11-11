@@ -8,7 +8,6 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 
 use crate::dvd::model::Disc;
-use crate::dvd::source::Source;
 use crate::dvd::Res;
 use crate::engine::backup::{self, BackupMsg, BackupRequest, BackupSummary, Output};
 use crate::engine::plan::{Plan, VideoMode};
@@ -234,7 +233,7 @@ const CANCELLED: &str = "__abgebrochen__";
 
 fn run_item(job: &BatchItem, cancel: &Arc<AtomicBool>, update: &dyn Fn(&dyn Fn(&mut BatchItem))) -> Res<BackupSummary> {
     // Öffnen und kurz analysieren; das zählt als die ersten 5 %.
-    let source = Source::open(&job.source)?;
+    let source = crate::engine::import::open_source(&job.source, &mut |_, _| !cancel.load(Ordering::Relaxed))?;
     let mut disc = Disc::open(source)?;
     if disc.check_scrambled() {
         return Err(copy_protected().into());

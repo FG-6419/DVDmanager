@@ -2,6 +2,12 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.012 · 2026-11-11 11:24
+
+- Einzelne VOB- und MPEG-Dateien öffnen: neue Karte „VOB-/MPEG-Datei“ im Startbild (auch per Ziehen und Ablegen und in der Warteschlange). Die Datei wird ohne Neukodierung in eine DVD-Struktur umgepackt; danach gehen Vorschau, Schnitt, Szenenerkennung, Blenden und alle Ausgabearten wie bei einer DVD. „Ganze DVD“ entfällt dabei, der Film steht gleich in der Liste.
+- Unterstützt werden MPEG-2-Programmströme mit AC-3-, MPEG- oder LPCM-Ton. Untertitel und DTS-Ton werden nicht übernommen. Die umgepackte Fassung liegt im Temp-Ordner und wird beim erneuten Öffnen derselben Datei wiederverwendet.
+- Schnittstellen: Ein zufälliges Sync-Muster im Ton konnte am Anfang eines Ausschnitts für einen Rahmenanfang gehalten werden; dann blieb ein angeschnittener Tonrahmen stehen. Behoben.
+
 ## 1.0.011 · 2026-11-11 11:03
 
 - Zeitleiste bei „Alle Schnitte“ und „Übergang anhören“: Beim Wechsel zum nächsten Eintrag sprang der Punkt kurz ans rechte Ende, bis das erste Bild geladen war. Er steht jetzt sofort an der Schnittstelle.

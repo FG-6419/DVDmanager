@@ -67,6 +67,11 @@ impl App {
                         self.prefs.deep_default,
                     )
                 })
+            } else if discslim::engine::import::is_media_path(path) {
+                // Einzeldatei: wird erst beim Abarbeiten umgepackt
+                let label = path.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                let output = self.unique_output(&label);
+                Ok(BatchItem::new(path.clone(), label, PlanSource::Auto(self.auto_settings()), output, self.prefs.deep_default))
             } else {
                 Source::open(path).map(|s| {
                     let output = self.unique_output(&s.label);

@@ -403,9 +403,27 @@ impl App {
         self.pending_project = None;
         self.project_path = None;
         self.start_loader(ctx, false, move |tx, cancel| {
-            let source = Source::open(&path)?;
+            let source = open_any(&path, tx, cancel)?;
             load_and_analyse(source, tx, cancel)
         });
+    }
+
+    /// Dateidialog für eine einzelne VOB- oder MPEG-Datei.
+    pub(super) fn pick_media(&mut self, ctx: &egui::Context) {
+        if let Some(p) = self
+            .load_dialog(tr!("VOB- oder MPEG-Datei wählen", "Choose VOB or MPEG file"))
+            .add_filter(tr!("Videodatei (MPEG-2)", "Video file (MPEG-2)"), &["vob", "mpg", "mpeg", "m2p"])
+            .add_filter(tr!("Alle Dateien", "All files"), &["*"])
+            .pick_file()
+        {
+            self.note_load(&p);
+            self.open_path(ctx, p);
+        }
+    }
+
+    /// Ist die geladene Quelle eine einzelne Videodatei (statt einer DVD)?
+    pub(super) fn is_single_file(&self) -> bool {
+        self.disc.as_ref().is_some_and(|d| discslim::engine::import::is_media_path(&d.source.origin))
     }
 
     /// Lädt eine Projektdatei und liest die zugehörige DVD neu ein.
@@ -427,7 +445,7 @@ impl App {
             return;
         }
         self.start_loader(ctx, false, move |tx, cancel| {
-            let source = Source::open(&source)?;
+            let source = open_any(&source, tx, cancel)?;
             load_and_analyse(source, tx, cancel)
         });
         self.pending_project = Some(proj);
@@ -697,6 +715,18 @@ impl App {
             .position(|t| t.category == Category::MainMovie)
             .map(|i| Selection::Item(ItemId::Title(i)))
             .unwrap_or(Selection::None);
+        // Einzelne Videodatei: „Ganze DVD“ ergibt keinen Sinn; der Film steht gleich in der Liste.
+        if discslim::engine::import::is_media_path(&disc.source.origin) {
+            self.plan.mode = Mode::Reauthor;
+            if let Some(t) = disc.titles.first() {
+                let settings = self.plan.items.get(&ItemId::Title(0)).cloned().unwrap_or_default();
+                let mut e = discslim::engine::plan::ReauthorEntry::new(0, 0, t.chapters.len().saturating_sub(1), settings);
+                let total = discslim::engine::plan::entry_duration_ms(&disc, &e);
+                e.cut = discslim::engine::plan::Cut::whole(total, self.prefs.cut_exact);
+                self.plan.reauthor.push(e);
+                self.sel = Selection::Entry(0);
+            }
+        }
         // Geladenes Projekt: seine Einstellungen ersetzen die Vorgaben.
         if let Some(proj) = self.pending_project.take() {
             match proj.plan_for(&disc) {
@@ -1176,6 +1206,14 @@ impl App {
             _ => {}
         }
     }
+}
+
+/// Öffnet DVD, Ordner, ISO oder eine einzelne VOB-/MPEG-Datei (die dafür umgepackt wird).
+fn open_any(path: &Path, tx: &std::sync::mpsc::Sender<LoadMsg>, cancel: &AtomicBool) -> Result<Source, String> {
+    discslim::engine::import::open_source(path, &mut |f, t| {
+        let _ = tx.send(LoadMsg::Progress(f, t.to_string()));
+        !cancel.load(Ordering::Relaxed)
+    })
 }
 
 /// Aktuelle Ortszeit als „HH:MM:SS“.
