@@ -456,6 +456,7 @@ impl App {
         let mut dup = None;
         let mut split = None;
         let mut listen = None;
+        let mut undo = false;
         ScrollArea::vertical().id_salt("neu").max_height(new_h).auto_shrink([false, false]).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
             if self.plan.reauthor.is_empty() {
@@ -497,7 +498,8 @@ impl App {
                     chapters
                 };
                 // Bei "Alle Schnitte" folgt die Auswahl dem laufenden Eintrag (siehe sync_preview)
-                let selected = self.sel == Selection::Entry(i);
+                let current = self.sel == Selection::Entry(i);
+                let selected = current || self.marked.contains(&i);
                 let r = self.entry_row(
                     ui,
                     disc,
@@ -509,13 +511,50 @@ impl App {
                     &fmt_size(size),
                     mode_label(e.settings.video),
                 );
-                if r.clicked() && !selected {
-                    self.sel = Selection::Entry(i);
-                    self.preview.dirty = true;
-                    // Bei "Alle Schnitte" springt die Wiedergabe zu diesem Eintrag
-                    if self.preview.program {
-                        if let Some(c) = self.preview.prog.get(i).copied() {
-                            self.preview.prog_goto(i, c.1);
+                if r.clicked() {
+                    let mods = ui.input(|inp| inp.modifiers);
+                    let cur = match self.sel {
+                        Selection::Entry(c) => Some(c),
+                        _ => None,
+                    };
+                    let mut go = None;
+                    if mods.command {
+                        // Strg+Klick: Eintrag dazu- oder abwählen
+                        if self.marked.is_empty() {
+                            self.marked.extend(cur);
+                        }
+                        if self.marked.insert(i) {
+                            go = Some(i);
+                        } else {
+                            self.marked.remove(&i);
+                            if current {
+                                go = self.marked.iter().next().copied();
+                            }
+                        }
+                    } else if mods.shift {
+                        // Umschalt+Klick: Bereich vom gewählten Eintrag bis hier
+                        let a = cur.unwrap_or(i);
+                        self.marked = (a.min(i)..=a.max(i)).collect();
+                        go = Some(i);
+                    } else {
+                        self.marked.clear();
+                        if !current {
+                            go = Some(i);
+                        }
+                    }
+                    // Nur noch einer markiert: das ist einfach die normale Auswahl
+                    if self.marked.len() == 1 {
+                        go = self.marked.iter().next().copied();
+                        self.marked.clear();
+                    }
+                    if let Some(g) = go.filter(|g| self.sel != Selection::Entry(*g)) {
+                        self.sel = Selection::Entry(g);
+                        self.preview.dirty = true;
+                        // Bei "Alle Schnitte" springt die Wiedergabe zu diesem Eintrag
+                        if self.preview.program {
+                            if let Some(c) = self.preview.prog.get(g).copied() {
+                                self.preview.prog_goto(g, c.1);
+                            }
                         }
                     }
                 }
@@ -549,13 +588,29 @@ impl App {
                         split = Some(i);
                         ui.close();
                     }
-                    if ui.button(trf!("{}  Entfernen", "{}  Remove", ic::TRASH)).clicked() {
-                        remove = Some(i);
+                    // Gehört der Eintrag zur Mehrfachauswahl, gilt Entfernen für alle markierten.
+                    let group = self.marked.len() > 1 && self.marked.contains(&i);
+                    let label = if group {
+                        trf!("{}  {} entfernen", "{}  Remove {}", ic::TRASH, discslim::i18n::count(self.marked.len(), "Eintrag", "Einträge", "entry", "entries"))
+                    } else {
+                        trf!("{}  Entfernen", "{}  Remove", ic::TRASH)
+                    };
+                    if ui.button(label).on_hover_text(tr!("Entf-Taste; Strg+Z holt den Eintrag zurück", "Delete key; Ctrl+Z brings it back")).clicked() {
+                        remove = Some(if group { self.marked.iter().copied().collect() } else { vec![i] });
                         ui.close();
                     }
                 });
             }
         });
+        if self.undo_remove.is_some() && !matches!(self.sel, Selection::Entry(_)) {
+            ui.horizontal(|ui| {
+                let n = self.undo_remove.as_ref().map_or(0, |v| v.len());
+                let tip = trf!("Entfernen rückgängig machen: {} (Strg+Z)", "Undo remove: {} (Ctrl+Z)", discslim::i18n::count(n, "Eintrag", "Einträge", "entry", "entries"));
+                if style::icon_button(ui, &p, ic::ARROW_COUNTER_CLOCKWISE, &tip).clicked() {
+                    undo = true;
+                }
+            });
+        }
         if let Selection::Entry(i) = self.sel {
             ui.horizontal(|ui| {
                 if style::icon_button(ui, &p, ic::ARROW_UP, tr!("Nach oben", "Move up")).clicked() && i > 0 {
@@ -572,13 +627,35 @@ impl App {
                 {
                     listen = Some(i);
                 }
-                if style::icon_button(ui, &p, ic::TRASH, tr!("Entfernen", "Remove")).clicked() {
-                    remove = Some(i);
+                let chosen = self.chosen_entries();
+                let tip = if chosen.len() > 1 {
+                    trf!("{} entfernen (Entf)", "Remove {} (Delete)", discslim::i18n::count(chosen.len(), "Eintrag", "Einträge", "entry", "entries"))
+                } else {
+                    tr!("Entfernen (Entf)", "Remove (Delete)").to_string()
+                };
+                if style::icon_button(ui, &p, ic::TRASH, &tip).clicked() {
+                    remove = Some(if chosen.is_empty() { vec![i] } else { chosen });
+                }
+                if let Some(v) = &self.undo_remove {
+                    let tip = trf!("Entfernen rückgängig machen: {} (Strg+Z)", "Undo remove: {} (Ctrl+Z)", discslim::i18n::count(v.len(), "Eintrag", "Einträge", "entry", "entries"));
+                    if style::icon_button(ui, &p, ic::ARROW_COUNTER_CLOCKWISE, &tip).clicked() {
+                        undo = true;
+                    }
+                }
+                if self.marked.len() > 1 {
+                    ui.label(RichText::new(trf!("{} gewählt", "{} selected", self.marked.len())).size(12.5).color(p.muted));
                 }
             });
         }
         if let Some(i) = listen {
             self.listen_junction(i);
+        }
+        if undo {
+            self.undo_last_remove();
+        }
+        // Andere Änderungen an der Liste verschieben die Stellen: Mehrfachauswahl aufheben
+        if split.is_some() || dup.is_some() || swap.is_some() {
+            self.marked.clear();
         }
         if let Some(i) = split {
             if i < self.plan.reauthor.len() {
@@ -600,14 +677,8 @@ impl App {
                 self.preview.dirty = true;
             }
         }
-        if let Some(i) = remove {
-            self.plan.reauthor.remove(i);
-            self.sel = if self.plan.reauthor.is_empty() {
-                Selection::None
-            } else {
-                Selection::Entry(i.min(self.plan.reauthor.len() - 1))
-            };
-            self.preview.dirty = true;
+        if let Some(v) = remove {
+            self.remove_entries(v);
         }
 
         ui.separator();
@@ -764,6 +835,66 @@ impl App {
     }
 
     /// Legt für jedes Kapitel im Bereich einen eigenen Eintrag an (ab Position t).
+    /// Einträge, die eine Aktion betrifft: die markierten, sonst der gewählte.
+    pub(super) fn chosen_entries(&self) -> Vec<usize> {
+        let n = self.plan.reauthor.len();
+        if self.marked.len() > 1 {
+            return self.marked.iter().copied().filter(|i| *i < n).collect();
+        }
+        match self.sel {
+            Selection::Entry(i) if i < n => vec![i],
+            _ => Vec::new(),
+        }
+    }
+
+    /// Entfernt Einträge und merkt sie sich für „Rückgängig“.
+    pub(super) fn remove_entries(&mut self, mut idx: Vec<usize>) {
+        idx.sort_unstable();
+        idx.dedup();
+        idx.retain(|i| *i < self.plan.reauthor.len());
+        let Some(&first) = idx.first() else { return };
+        let mut removed = Vec::with_capacity(idx.len());
+        for &i in idx.iter().rev() {
+            removed.push((i, self.plan.reauthor.remove(i)));
+        }
+        removed.reverse();
+        let n = removed.len();
+        self.undo_remove = Some(removed);
+        self.marked.clear();
+        self.sel = if self.plan.reauthor.is_empty() { Selection::None } else { Selection::Entry(first.min(self.plan.reauthor.len() - 1)) };
+        self.preview.dirty = true;
+        self.notice = Some((
+            trf!("{} entfernt · Strg+Z macht es rückgängig", "{} removed · Ctrl+Z undoes it", discslim::i18n::count(n, "Eintrag", "Einträge", "entry", "entries")),
+            std::time::Instant::now(),
+        ));
+    }
+
+    /// Holt die zuletzt entfernten Einträge an ihre alte Stelle zurück.
+    pub(super) fn undo_last_remove(&mut self) {
+        let Some(removed) = self.undo_remove.take() else { return };
+        self.marked.clear();
+        let mut first = None;
+        for (i, e) in removed {
+            let at = i.min(self.plan.reauthor.len());
+            self.plan.reauthor.insert(at, e);
+            first.get_or_insert(at);
+            self.marked.insert(at);
+        }
+        if self.marked.len() < 2 {
+            self.marked.clear();
+        }
+        let n = self.marked.len().max(1);
+        if let Some(f) = first {
+            self.plan.mode = Mode::Reauthor;
+            self.sel = Selection::Entry(f);
+        }
+        self.preview.dirty = true;
+        self.notice = Some((
+            trf!("{} wiederhergestellt", "{} restored", discslim::i18n::count(n, "Eintrag", "Einträge", "entry", "entries")),
+            std::time::Instant::now(),
+        ));
+    }
+
     pub(super) fn split_chapters(&mut self, disc: &Disc, title: usize, first: usize, last: usize, settings: discslim::engine::plan::ItemSettings, at: usize) {
         let at = at.min(self.plan.reauthor.len());
         for (k, ch) in (first..=last.max(first)).enumerate() {
@@ -786,6 +917,7 @@ impl App {
         let total = entry_duration_ms(disc, &entry);
         entry.cut = Cut::whole(total, self.prefs.cut_exact);
         self.plan.reauthor.push(entry);
+        self.marked.clear();
         self.sel = Selection::Entry(self.plan.reauthor.len() - 1);
         self.preview.dirty = true;
     }

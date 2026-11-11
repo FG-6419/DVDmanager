@@ -209,6 +209,10 @@ pub struct App {
     drives: Vec<(String, PathBuf, bool)>,
     drives_at: Option<Instant>,
     keep_plan_on_load: bool,
+    /// Mehrfachauswahl in der Liste „Neue DVD“ (Strg/Umschalt+Klick); leer = nur `sel`
+    marked: std::collections::BTreeSet<usize>,
+    /// Zuletzt entfernte Einträge mit ihrer Stelle, für „Rückgängig“
+    undo_remove: Option<Vec<(usize, discslim::engine::plan::ReauthorEntry)>>,
     /// Vorschaubilder der Einträge und die Schleife unter der Maus
     thumbs: Option<thumbs::Thumbs>,
     hover_loop: Option<thumbs::HoverLoop>,
@@ -363,6 +367,8 @@ impl App {
             drives: Vec::new(),
             drives_at: None,
             keep_plan_on_load: false,
+            marked: Default::default(),
+            undo_remove: None,
             thumbs: Some(thumbs::Thumbs::new(cc.egui_ctx.clone())),
             hover_loop: None,
             target_before_sample: None,
@@ -690,6 +696,9 @@ impl App {
             self.preview.dirty = true;
             return;
         }
+        // Neue DVD: Auswahl und Rückgängig gehören zur alten Liste.
+        self.marked.clear();
+        self.undo_remove = None;
         // Neue DVD: alte Vorschaubilder gelten nicht mehr.
         if let Some(t) = self.thumbs.as_mut() {
             t.clear();
@@ -844,6 +853,21 @@ impl App {
         });
         if save || save_as {
             self.save_project(save_as);
+        }
+        // Entf löscht die gewählten Einträge, Strg+Z holt sie zurück. Nicht, solange ein
+        // Textfeld schreibt oder ein Dialog offen ist.
+        let dialog_open = self.backup_dlg.is_some() || self.settings_open || self.about_open || self.scene_dlg.is_some() || self.queue_open || self.result.is_some() || self.error.is_some();
+        if self.plan.mode == Mode::Reauthor && !dialog_open && !ctx.egui_wants_keyboard_input() {
+            let (del, undo) = ctx.input_mut(|i| (i.consume_key(egui::Modifiers::NONE, egui::Key::Delete), i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z)));
+            if del {
+                let chosen = self.chosen_entries();
+                if !chosen.is_empty() {
+                    self.remove_entries(chosen);
+                }
+            }
+            if undo {
+                self.undo_last_remove();
+            }
         }
     }
 
@@ -1048,6 +1072,43 @@ impl App {
                 }
                 self.sel = Selection::Entry(0);
                 self.preview.dirty = true;
+            }
+            // Mehrfachauswahl: drei Einträge, 1 und 3 markiert, entfernen, rückgängig
+            ("multi", 5) => {
+                self.plan.mode = Mode::Reauthor;
+                if let Some(d) = self.disc.clone() {
+                    for (i, t) in d.titles.iter().enumerate() {
+                        self.plan.reauthor.push(discslim::engine::plan::ReauthorEntry::new(i, 0, t.chapters.len().saturating_sub(1), Default::default()));
+                    }
+                }
+                self.sel = Selection::Entry(2);
+                self.marked = [0usize, 2].into_iter().collect();
+                self.preview.dirty = true;
+            }
+            ("multi", 30 | 50 | 70) => {
+                let titles: Vec<usize> = self.plan.reauthor.iter().map(|e| e.title + 1).collect();
+                let line = format!(
+                    "Bild {}: Einträge (Titel) {titles:?}, gewählt {:?}, markiert {:?}, betroffen {:?}, rückgängig {}\n",
+                    self.frames,
+                    self.sel,
+                    self.marked,
+                    self.chosen_entries(),
+                    self.undo_remove.as_ref().map_or(0, |v| v.len())
+                );
+                if let Ok(log) = std::env::var("DISCSLIM_DEV_LOG") {
+                    use std::io::Write;
+                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log) {
+                        let _ = f.write_all(line.as_bytes());
+                    }
+                }
+                match self.frames {
+                    30 => {
+                        let c = self.chosen_entries();
+                        self.remove_entries(c);
+                    }
+                    50 => self.undo_last_remove(),
+                    _ => {}
+                }
             }
             ("listen", 40) if std::env::var("DISCSLIM_LISTEN").as_deref() == Ok("switch") => {
                 // Ansicht „Ganzer Titel“: Wechsel zum zweiten Eintrag

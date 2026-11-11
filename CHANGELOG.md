@@ -2,6 +2,12 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.015 · 2026-11-11 18:06
+
+- Mehrfachauswahl in der Liste „Neue DVD“: Strg+Klick wählt einzelne Einträge dazu oder ab, Umschalt+Klick einen Bereich. Entfernen (Papierkorb, Rechtsklick-Menü) gilt dann für alle gewählten.
+- Entf-Taste entfernt den gewählten Eintrag bzw. alle gewählten.
+- Rückgängig: Strg+Z oder der neue Pfeil-Knopf unter der Liste holt die zuletzt entfernten Einträge an ihre alte Stelle zurück.
+
 ## 1.0.014 · 2026-11-11 17:40
 
 - Vorschau „Ganzer Titel“: Beim Wechsel zu einem geschnittenen Eintrag steht der Zeitleisten-Punkt jetzt am Anfang des Schnitts (grüner Rahmen) statt am Titelanfang.
