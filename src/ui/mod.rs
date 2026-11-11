@@ -1049,6 +1049,10 @@ impl App {
                 self.sel = Selection::Entry(0);
                 self.preview.dirty = true;
             }
+            ("listen", 40) if std::env::var("DISCSLIM_LISTEN").as_deref() == Ok("switch") => {
+                // Ansicht „Ganzer Titel“: Wechsel zum zweiten Eintrag
+                self.sel = Selection::Entry(1);
+            }
             ("listen", 40) => self.listen_junction(0),
             ("listen", n) if n > 40 => {
                 if let Ok(log) = std::env::var("DISCSLIM_DEV_LOG") {

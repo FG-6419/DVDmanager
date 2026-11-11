@@ -555,8 +555,21 @@ impl App {
             return;
         }
         self.preview.dirty = false;
+        let switched = self.preview.loaded != Some(want);
         self.preview.stop();
         self.preview.loaded = Some(want);
+        // Wechsel zu einem geschnittenen Eintrag: auch in „Ganzer Titel“ am Schnittanfang
+        // beginnen, nicht am Titelanfang. (Bei „Alle Schnitte“ springt die Wiedergabe selbst.)
+        if switched && !self.preview.program {
+            if let Selection::Entry(i) = want {
+                if let Some(e) = self.plan.reauthor.get(i) {
+                    let start = e.cut.start();
+                    if start > discslim::engine::plan::CUT_EDGE_MS && self.preview.prog_seek.is_none() {
+                        self.preview.prog_seek = Some(start as f64);
+                    }
+                }
+            }
+        }
         let Some(disc) = self.disc.clone() else { return };
         let (segments, ms, chapters) = match want {
             Selection::Item(ItemId::Title(i)) | Selection::Source(i) => {

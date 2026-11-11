@@ -2,6 +2,10 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.014 · 2026-11-11 17:40
+
+- Vorschau „Ganzer Titel“: Beim Wechsel zu einem geschnittenen Eintrag steht der Zeitleisten-Punkt jetzt am Anfang des Schnitts (grüner Rahmen) statt am Titelanfang.
+
 ## 1.0.013 · 2026-11-11 17:01
 
 - Blockartefakte an bildgenauen Schnitten behoben: Die neu kodierten Bilder einer angeschnittenen Bildgruppe bekamen nur ihren Anteil am Original. Blieb ein einziges Bild übrig, musste es als I-Bild mit einem Zwölftel auskommen und wurde grob (Quantisierer bis 19). Jetzt bekommt das erste Bild so viel wie das I-Bild im Original, begrenzt durch die DVD-Datenrate; in den Tests liegt der Quantisierer überall bei 2 bis 5.
