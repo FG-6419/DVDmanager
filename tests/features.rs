@@ -198,6 +198,155 @@ fn chapters_at_cuts() {
     assert_eq!(plan.title_groups(&disc).len(), 3);
 }
 
+/// Liest ein EBML-Element: (ID, Länge des Kopfes, Länge des Inhalts).
+fn ebml_el(d: &[u8], at: usize) -> (u32, usize, usize) {
+    let read = |at: usize, keep_marker: bool| -> (u64, usize) {
+        let first = d[at];
+        let len = first.leading_zeros() as usize + 1;
+        let mut v = if keep_marker { u64::from(first) } else { u64::from(first & (0xFFu16 >> len) as u8) };
+        for k in 1..len {
+            v = (v << 8) | u64::from(d[at + k]);
+        }
+        (v, len)
+    };
+    let (id, il) = read(at, true);
+    let (size, sl) = read(at + il, false);
+    (id as u32, il + sl, size as usize)
+}
+
+/// Kinder eines Elements: (ID, Lage des Elements, Lage des Inhalts, Länge des Inhalts).
+fn ebml_children(d: &[u8], from: usize, to: usize) -> Vec<(u32, usize, usize, usize)> {
+    let mut out = Vec::new();
+    let mut at = from;
+    while at < to {
+        let (id, hl, len) = ebml_el(d, at);
+        out.push((id, at, at + hl, len));
+        at += hl + len;
+    }
+    assert_eq!(at, to, "Elemente laufen über das Ende hinaus");
+    out
+}
+
+fn ebml_uint(d: &[u8], at: usize, len: usize) -> u64 {
+    d[at..at + len].iter().fold(0, |v, b| (v << 8) | u64::from(*b))
+}
+
+/// Prüft den Aufbau einer MKV-Datei; liefert Kapitelzeiten (ms), Videoblöcke, Tonblöcke und Dauer (ms).
+fn check_mkv(path: &Path) -> (Vec<u64>, usize, usize, f64) {
+    let d = std::fs::read(path).unwrap();
+    let top = ebml_children(&d, 0, d.len());
+    assert_eq!(top[0].0, 0x1A45_DFA3, "EBML-Kopf");
+    let seg = top.iter().find(|e| e.0 == 0x1853_8067).expect("Segment");
+    assert_eq!(seg.2 + seg.3, d.len(), "Segmentlänge");
+    let seg_start = seg.2;
+    let kids = ebml_children(&d, seg.2, seg.2 + seg.3);
+    // Wegweiser zeigt auf die richtigen Elemente
+    let head = kids.iter().find(|e| e.0 == 0x114D_9B74).expect("SeekHead");
+    for s in ebml_children(&d, head.2, head.2 + head.3) {
+        let parts = ebml_children(&d, s.2, s.2 + s.3);
+        let id = ebml_uint(&d, parts[0].2, parts[0].3) as u32;
+        let pos = ebml_uint(&d, parts[1].2, parts[1].3) as usize;
+        assert_eq!(ebml_el(&d, seg_start + pos).0, id, "Wegweiser für {id:X}");
+    }
+    let info = kids.iter().find(|e| e.0 == 0x1549_A966).expect("Info");
+    let dur = ebml_children(&d, info.2, info.2 + info.3).into_iter().find(|e| e.0 == 0x4489).expect("Dauer");
+    let duration = f64::from_be_bytes(d[dur.2..dur.2 + 8].try_into().unwrap());
+    let mut chapters = Vec::new();
+    if let Some(ch) = kids.iter().find(|e| e.0 == 0x1043_A770) {
+        for ed in ebml_children(&d, ch.2, ch.2 + ch.3) {
+            for atom in ebml_children(&d, ed.2, ed.2 + ed.3).into_iter().filter(|e| e.0 == 0xB6) {
+                let start = ebml_children(&d, atom.2, atom.2 + atom.3).into_iter().find(|e| e.0 == 0x91).unwrap();
+                chapters.push(ebml_uint(&d, start.2, start.3) / 1_000_000);
+            }
+        }
+    }
+    let (mut video, mut audio) = (0, 0);
+    let mut times: Vec<i64> = Vec::new();
+    let mut last_cluster = None;
+    let clusters: Vec<_> = kids.iter().filter(|e| e.0 == 0x1F43_B675).collect();
+    for c in &clusters {
+        for b in ebml_children(&d, c.2, c.2 + c.3) {
+            match b.0 {
+                0xE7 => {
+                    let t = ebml_uint(&d, b.2, b.3);
+                    assert!(last_cluster.is_none_or(|l| t >= l), "Cluster-Zeiten laufen rückwärts");
+                    last_cluster = Some(t);
+                }
+                0xA3 => match d[b.2] {
+                    0x81 => {
+                        video += 1;
+                        let rel = i16::from_be_bytes([d[b.2 + 1], d[b.2 + 2]]);
+                        times.push(last_cluster.unwrap_or(0) as i64 + i64::from(rel));
+                    }
+                    0x82 => audio += 1,
+                    x => panic!("unbekannte Spur {x:X}"),
+                },
+                _ => {}
+            }
+        }
+    }
+    // Bildzeiten: sortiert ein gleichmäßiges Raster (40 ms bei PAL), keine doppelten
+    times.sort_unstable();
+    let odd: Vec<(i64, i64)> = times.windows(2).filter(|w| !(39..=41).contains(&(w[1] - w[0]))).map(|w| (w[0], w[1] - w[0])).collect();
+    println!("Bildabstände außerhalb 39..41 ms: {odd:?}");
+    assert!(odd.len() <= 20, "Bildzeiten unregelmäßig: {odd:?}");
+    // Cues zeigen auf Cluster
+    let cues = kids.iter().find(|e| e.0 == 0x1C53_BB6B).expect("Cues");
+    for cp in ebml_children(&d, cues.2, cues.2 + cues.3) {
+        let tp = ebml_children(&d, cp.2, cp.2 + cp.3).into_iter().find(|e| e.0 == 0xB7).unwrap();
+        let pos = ebml_children(&d, tp.2, tp.2 + tp.3).into_iter().find(|e| e.0 == 0xF1).unwrap();
+        assert_eq!(ebml_el(&d, seg_start + ebml_uint(&d, pos.2, pos.3) as usize).0, 0x1F43_B675, "Cue zeigt nicht auf einen Cluster");
+    }
+    (chapters, video, audio, duration)
+}
+
+/// MKV-Ausgabe: Kapitel an den Schnitten und an eigenen Marken.
+#[test]
+fn mkv_with_chapters() {
+    let w = work("mkv");
+    let src = demo::build_sample(&w, |_| {}).unwrap();
+    let disc = open_analysed(&src);
+    let ti = longest_title(&disc);
+    let t = &disc.titles[ti];
+    let last = t.chapters.len() - 1;
+    let total = t.ms;
+    let parts = [(total / 2, total * 3 / 4, false), (500, total / 4, true), (total * 3 / 4, total, false)];
+    let mut plan = Plan::new(NO_TARGET);
+    plan.mode = Mode::Reauthor;
+    plan.chapters_at_cuts = true;
+    let mut lens = Vec::new();
+    for (k, (a, b, exact)) in parts.iter().enumerate() {
+        let mut e = ReauthorEntry::new(ti, 0, last, ItemSettings::default());
+        e.cut = Cut { start_ms: Some(*a), end_ms: Some(*b), exact: *exact };
+        if k == 2 {
+            e.chapter_marks = Some(vec![a + (b - a) / 2]);
+        }
+        lens.push(b - a);
+        plan.reauthor.push(e);
+    }
+    let out = w.join("film.mkv");
+    let s = run_backup(open_analysed(&src), plan.clone(), Output::Mkv { path: out.clone(), audio: None });
+    assert!(!w.join("film.mkv-arbeitsdatei.mpg").exists(), "Arbeitsdatei bleibt liegen");
+    let (chapters, video, audio, duration) = check_mkv(&out);
+    println!("Kapitel {chapters:?}, {video} Bilder, {audio} Tonblöcke, {duration} ms, Prüfung {:?}", s.check);
+    let want = [0, lens[0], lens[0] + lens[1], lens[0] + lens[1] + lens[2] / 2];
+    assert_eq!(chapters.len(), 4, "drei Schnitte und eine eigene Marke");
+    for (c, m) in chapters.iter().zip(want) {
+        assert!(c.abs_diff(m) <= 600, "Kapitel bei {c} statt {m}");
+    }
+    let sum: u64 = lens.iter().sum();
+    assert!((duration - sum as f64).abs() < 1_000.0, "Dauer {duration} statt {sum}");
+    // 25 Bilder je Sekunde (PAL)
+    assert!((video as f64 - sum as f64 / 40.0).abs() < 30.0, "{video} Bilder");
+
+    // Ohne die Option: nur die eigene Marke und Kapitel 1
+    plan.chapters_at_cuts = false;
+    let out = w.join("ohne.mkv");
+    run_backup(open_analysed(&src), plan, Output::Mkv { path: out.clone(), audio: None });
+    let (chapters, ..) = check_mkv(&out);
+    assert_eq!(chapters.len(), 2, "{chapters:?}");
+}
+
 /// Mittlere Farbe (R, G, B) des Bildes an einer Stelle eines Titels.
 fn frame_rgb(disc: &Disc, title: usize, ms: f64) -> [f64; 3] {
     use discslim::engine::preview::{self, PreviewCmd};
@@ -606,6 +755,15 @@ fn real_project_backup() {
     disc.analyse(true, &mut |_, _| true).unwrap();
     let mut plan = proj.plan_for(&disc).unwrap();
     let w = work("echtes_projekt");
+    // DVDMANAGER_REAL_MKV=1: als MKV mit Kapitelmarken an den Schnitten
+    if std::env::var("DVDMANAGER_REAL_MKV").is_ok() {
+        plan.chapters_at_cuts = true;
+        let out = w.join("projekt.mkv");
+        let s = run_backup(disc, plan.clone(), Output::Mkv { path: out.clone(), audio: None });
+        let (chapters, video, audio, duration) = check_mkv(&out);
+        println!("{} Einträge, Kapitel {chapters:?}, {video} Bilder, {audio} Tonblöcke, {duration} ms, Prüfung: {:?}", plan.reauthor.len(), s.check);
+        return;
+    }
     // DVDMANAGER_REAL_JOIN=1: als DVD-Ordner mit Kapitelmarken an den Schnitten
     if std::env::var("DVDMANAGER_REAL_JOIN").is_ok() {
         plan.chapters_at_cuts = true;

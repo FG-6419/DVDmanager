@@ -36,6 +36,8 @@ pub enum Output {
     /// Wie Vob, aber als schlichter MPEG-2-Programmstrom: Bild und eine Tonspur,
     /// ohne Navigationspakete, Untertitel und Füllpakete. udio: gewünschte Spur.
     Mpeg { path: PathBuf, audio: Option<u8> },
+    /// Wie Mpeg, aber als Matroska-Datei (MKV) mit Kapiteln.
+    Mkv { path: PathBuf, audio: Option<u8> },
 }
 
 pub struct BackupRequest {
@@ -158,7 +160,7 @@ fn sheet_path_for(output: &Output) -> PathBuf {
             let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "DVD".into());
             p.with_file_name(format!("{name}.jpg"))
         }
-        Output::Iso(p) | Output::Burn(p) | Output::Vob(p) | Output::Mpeg { path: p, .. } => p.with_extension("jpg"),
+        Output::Iso(p) | Output::Burn(p) | Output::Vob(p) | Output::Mpeg { path: p, .. } | Output::Mkv { path: p, .. } => p.with_extension("jpg"),
     }
 }
 
@@ -237,7 +239,7 @@ impl Ctx<'_> {
     }
 }
 
-const CANCELLED: &str = "__abgebrochen__";
+pub(crate) const CANCELLED: &str = "__abgebrochen__";
 
 fn write_with_bup(dir: &Path, name_ifo: &str, data: &[u8]) -> Res<(PathBuf, PathBuf)> {
     let mut d = data.to_vec();
@@ -723,7 +725,8 @@ fn cell_flags(raw: &[u8], pgc_off: usize, cell_idx: usize) -> [u8; 4] {
 
 /// Schreibt die gewählten Titel in Abspielreihenfolge in eine einzige VOB-Datei.
 /// mpeg: Some(gewünschte Tonspur) für die Ausgabe als schlichter MPEG-2-Strom.
-fn run_vob(disc: &Disc, plan: &Plan, path: &Path, ctx: &mut Ctx, mpeg: Option<Option<u8>>) -> Res<u64> {
+/// `chapters`: bekommt die Kapitelanfänge (90-kHz-Zeitstempel der Ausgabe), für MKV.
+fn run_vob(disc: &Disc, plan: &Plan, path: &Path, ctx: &mut Ctx, mpeg: Option<Option<u8>>, chapters: &mut Vec<i64>) -> Res<u64> {
     if plan.reauthor.is_empty() {
         return Err(tr!("Es wurde kein Titel für die Datei ausgewählt.", "No title has been chosen for the file.").into());
     }
@@ -767,7 +770,12 @@ fn run_vob(disc: &Disc, plan: &Plan, path: &Path, ctx: &mut Ctx, mpeg: Option<Op
         let mut map = SectorMap::default();
         let mut cell_new = 0u8;
         let mut last_src_vob = None;
-        let _ = (t, v);
+        let _ = v;
+        // Kapitel wie auf der DVD: Anfang jedes Eintrags (mit "An Schnitten"), sonst nur der
+        // erste, dazu eigene Marken oder die Kapitel der DVD im Eintrag.
+        let marks = entry.output_marks(disc);
+        let mut next_mark = 0usize;
+        let mut entry_start = true;
 
         entry_stream(disc, entry, plan.declick, |ev| {
             ctx.check()?;
@@ -779,6 +787,23 @@ fn run_vob(disc: &Disc, plan: &Plan, path: &Path, ctx: &mut Ctx, mpeg: Option<Op
                 }
                 StreamEvent::Vobu(item) => item,
             };
+            let mut chapter = entry_start && (i == 0 || plan.chapters_at_cuts);
+            if !entry_start {
+                match &marks {
+                    Some(m) => {
+                        while next_mark < m.len() && m[next_mark] <= item.out_t0_ms {
+                            next_mark += 1;
+                            chapter = true;
+                        }
+                    }
+                    None => chapter = item.cell_start && t.chapters.iter().any(|c| c.first_cell_idx == item.title_cell),
+                }
+            } else if let Some(m) = &marks {
+                while next_mark < m.len() && m[next_mark] <= item.out_t0_ms {
+                    next_mark += 1;
+                }
+            }
+            entry_start = false;
             if item.cell_start {
                 if last_src_vob != Some(item.pc.vob_id) || cell_new == 255 {
                     vob_new = vob_new.wrapping_add(1);
@@ -793,6 +818,10 @@ fn run_vob(disc: &Disc, plan: &Plan, path: &Path, ctx: &mut Ctx, mpeg: Option<Op
             let in_sectors = item.in_sectors as u32;
             Nav::set_ids(&mut out.data, vob_new, cell_new);
             retimer.apply(&mut out.data);
+            if chapter && out.data.len() >= SECTOR {
+                // Anfang der VOBU laut Navigationspaket, schon auf der Zeitachse der Datei
+                chapters.push(i64::from(crate::dvd::be32(&out.data, crate::dvd::vob::PCI_OFF + 12)));
+            }
             if mpeg.is_some() {
                 // Nur Bild und Ton bleiben übrig.
                 let mut kept = Vec::with_capacity(out.data.len());
@@ -892,7 +921,7 @@ fn guard_source(disc: &Disc, output: &Output, video_dir: &Path) -> Res<()> {
                 }
             }
         }
-        Output::Iso(p) | Output::Burn(p) | Output::Vob(p) | Output::Mpeg { path: p, .. } => {
+        Output::Iso(p) | Output::Burn(p) | Output::Vob(p) | Output::Mpeg { path: p, .. } | Output::Mkv { path: p, .. } => {
             let is_source_file = disc
                 .source
                 .files
@@ -952,12 +981,15 @@ fn run_inner(req: &BackupRequest, tx: &Sender<BackupMsg>, cancel: &AtomicBool) -
     };
 
     let single = match &req.output {
-        Output::Vob(p) => Some((p, None)),
-        Output::Mpeg { path, audio } => Some((path, Some(*audio))),
+        Output::Vob(p) => Some((p, None, false)),
+        Output::Mpeg { path, audio } => Some((path, Some(*audio), false)),
+        Output::Mkv { path, audio } => Some((path, Some(*audio), true)),
         _ => None,
     };
-    if let Some((path, mpeg)) = single {
+    if let Some((path, mpeg, mkv)) = single {
         guard_source(disc, &req.output, path)?;
+        // MKV: erst ein MPEG-2-Strom daneben, der dann umgepackt wird
+        let stream_path = if mkv { path.with_extension("mkv-arbeitsdatei.mpg") } else { path.clone() };
         let mut ctx = Ctx {
             tx,
             cancel,
@@ -965,16 +997,38 @@ fn run_inner(req: &BackupRequest, tx: &Sender<BackupMsg>, cancel: &AtomicBool) -
             total_in,
             last_report: Instant::now(),
             written: 0,
-            span: 0.98,
+            span: if mkv { 0.9 } else { 0.98 },
         };
-        let sectors = match run_vob(disc, &req.plan, path, &mut ctx, mpeg) {
+        let mut chapters = Vec::new();
+        let mut sectors = match run_vob(disc, &req.plan, &stream_path, &mut ctx, mpeg, &mut chapters) {
             Ok(s) => s,
             Err(e) => {
-                let _ = std::fs::remove_file(path);
+                let _ = std::fs::remove_file(&stream_path);
                 return Err(e);
             }
         };
-        let post = post_process(&req.plan, &[vec![path.clone()]], true, sheet_path_for(&req.output), tx, cancel);
+        let post = post_process(&req.plan, &[vec![stream_path.clone()]], true, sheet_path_for(&req.output), tx, cancel);
+        if mkv {
+            let stage = tr!("MKV-Datei schreiben", "Writing MKV file");
+            let _ = tx.send(BackupMsg::Stage(stage.into()));
+            let mut last = Instant::now();
+            let mut progress = |f: f32| {
+                if last.elapsed().as_millis() > 200 {
+                    last = Instant::now();
+                    let _ = tx.send(BackupMsg::Progress { fraction: 0.9 + 0.1 * f, sectors_out: sectors, ratio_in: 1.0, current: stage.into() });
+                }
+                !cancel.load(Ordering::Relaxed)
+            };
+            let res = crate::engine::mkv::remux(&stream_path, path, &chapters, &mut progress);
+            let _ = std::fs::remove_file(&stream_path);
+            match res {
+                Ok(bytes) => sectors = bytes.div_ceil(SECTOR as u64),
+                Err(e) => {
+                    let _ = std::fs::remove_file(path);
+                    return Err(e);
+                }
+            }
+        }
         return Ok(BackupSummary {
             path: path.clone(),
             sectors,
@@ -994,7 +1048,7 @@ fn run_inner(req: &BackupRequest, tx: &Sender<BackupMsg>, cancel: &AtomicBool) -
             let vd = p.join("VIDEO_TS");
             (p.clone(), vd, None)
         }
-        Output::Vob(_) | Output::Mpeg { .. } => return Err(tr!("Interner Fehler bei der Datei-Ausgabe", "Internal error in file output").into()),
+        Output::Vob(_) | Output::Mpeg { .. } | Output::Mkv { .. } => return Err(tr!("Interner Fehler bei der Datei-Ausgabe", "Internal error in file output").into()),
         Output::Iso(p) | Output::Burn(p) => {
             let temp = PathBuf::from(format!("{}.arbeitsordner", p.display()));
             (p.clone(), temp.join("VIDEO_TS"), Some(temp))

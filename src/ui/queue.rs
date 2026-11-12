@@ -149,7 +149,7 @@ impl App {
                         ui.label(RichText::new(ic::QUEUE).size(32.0).color(p.faint));
                         ui.label(RichText::new(tr!("Noch nichts in der Warteschlange.", "Nothing in the queue yet.")).color(p.muted));
                         ui.label(
-                            RichText::new(tr!("Im Backup-Dialog kannst du die aktuelle DVD mit allen Einstellungen hinzufügen.", "In the backup dialog you can add the current DVD with all its settings."))
+                            RichText::new(tr!("Im Export-Dialog kannst du die aktuelle DVD mit allen Einstellungen hinzufügen.", "In the export dialog you can add the current DVD with all its settings."))
                                 .size(12.5)
                                 .color(p.faint),
                         );

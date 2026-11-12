@@ -179,13 +179,13 @@ struct Pic {
 }
 
 /// Fertige Bildgruppe: Daten ab Sequenzkopf, Bilder mit Lage relativ zu `data`.
-struct Gop {
-    data: Vec<u8>,
-    pics: Vec<(usize, u16, u8, u32, Option<i64>, Option<i64>)>,
+pub(crate) struct Gop {
+    pub(crate) data: Vec<u8>,
+    pub(crate) pics: Vec<(usize, u16, u8, u32, Option<i64>, Option<i64>)>,
 }
 
 #[derive(Default)]
-struct VideoParser {
+pub(crate) struct VideoParser {
     es: Vec<u8>,
     base: u64,
     scan: usize,
@@ -197,17 +197,17 @@ struct VideoParser {
     last_pic: Option<u64>,
     /// Laufender Sequenzkopf (Anfang) und die zuletzt vollständige Kopie samt Erweiterungen
     seq_at: Option<usize>,
-    last_seq: Vec<u8>,
-    width: u32,
-    height: u32,
-    aspect: u8,
-    rate: u8,
-    mpeg2: bool,
+    pub(crate) last_seq: Vec<u8>,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) aspect: u8,
+    pub(crate) rate: u8,
+    pub(crate) mpeg2: bool,
     seen_seq: bool,
 }
 
 impl VideoParser {
-    fn push(&mut self, payload: &[u8], pts: Option<i64>, dts: Option<i64>) {
+    pub(crate) fn push(&mut self, payload: &[u8], pts: Option<i64>, dts: Option<i64>) {
         if let Some(p) = pts {
             self.anchors.push_back((self.base + self.es.len() as u64, p, dts));
         }
@@ -215,7 +215,7 @@ impl VideoParser {
     }
 
     /// Sucht Bildgruppen; fertige werden zurückgegeben.
-    fn take_gops(&mut self, eof: bool) -> Vec<Gop> {
+    pub(crate) fn take_gops(&mut self, eof: bool) -> Vec<Gop> {
         let mut out = Vec::new();
         let limit = if eof { self.es.len() } else { self.es.len().saturating_sub(16) };
         let mut i = self.scan;
@@ -348,7 +348,7 @@ impl VideoParser {
         Some(Gop { data, pics })
     }
 
-    fn frame_ticks(&self) -> f64 {
+    pub(crate) fn frame_ticks(&self) -> f64 {
         match self.rate {
             1 => 3753.75,
             2 => 3750.0,
@@ -367,36 +367,36 @@ impl VideoParser {
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq)]
-enum AKind {
+pub(crate) enum AKind {
     Mpeg,
     Ac3,
     /// Bits, Abtastrate, Kanäle und die drei Kopfbytes der Quelle
     Lpcm { bits: u8, rate: u32, ch: u8, hdr: [u8; 3] },
 }
 
-struct AudioStream {
-    src: u8,
-    kind: AKind,
+pub(crate) struct AudioStream {
+    pub(crate) src: u8,
+    pub(crate) kind: AKind,
     phys: u8,
     es: Vec<u8>,
     base: u64,
     anchors: VecDeque<(u64, i64)>,
     pos: usize,
     last_frame: Option<u64>,
-    last_src: Option<i64>,
-    dur: i64,
+    pub(crate) last_src: Option<i64>,
+    pub(crate) dur: i64,
     /// Fertige Rahmen: Daten und Zeit in der Quelle
-    frames: VecDeque<(Vec<u8>, i64)>,
+    pub(crate) frames: VecDeque<(Vec<u8>, i64)>,
     off: Option<i64>,
     last_out: Option<i64>,
-    channels: u8,
-    rate: u32,
+    pub(crate) channels: u8,
+    pub(crate) rate: u32,
     /// LPCM: Lage des ersten Rahmens bekannt
     aligned: bool,
 }
 
 impl AudioStream {
-    fn new(src: u8, kind: AKind, phys: u8) -> Self {
+    pub(crate) fn new(src: u8, kind: AKind, phys: u8) -> Self {
         Self {
             src,
             kind,
@@ -438,7 +438,7 @@ impl AudioStream {
     }
 
     /// `first`: LPCM-Zeiger auf den ersten Rahmen im Paket (Abstand ab Nutzdaten)
-    fn push(&mut self, payload: &[u8], pts: Option<i64>, first: Option<usize>) {
+    pub(crate) fn push(&mut self, payload: &[u8], pts: Option<i64>, first: Option<usize>) {
         let at = self.base + self.es.len() as u64;
         if !self.aligned {
             // LPCM: alles vor dem ersten bekannten Rahmenanfang entfällt
@@ -458,7 +458,7 @@ impl AudioStream {
     }
 
     /// Zerlegt den Strom in vollständige Rahmen.
-    fn parse(&mut self, eof: bool) {
+    pub(crate) fn parse(&mut self, eof: bool) {
         let codec = self.codec();
         let lpcm = self.lpcm_frame();
         loop {

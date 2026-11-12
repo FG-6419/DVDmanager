@@ -74,6 +74,8 @@ pub enum OutputKind {
     Vob,
     /// Schlichter MPEG-2-Strom mit einer Tonspur
     Mpeg,
+    /// Matroska mit Kapiteln (Bild und eine Tonspur)
+    Mkv,
 }
 
 pub struct BackupDialog {
@@ -82,6 +84,7 @@ pub struct BackupDialog {
     pub iso: String,
     pub vob: String,
     pub mpg: String,
+    pub mkv: String,
     /// Tonspur für die MPEG-2-Datei (physische Nummer)
     pub mpeg_audio: Option<u8>,
     /// VOB-Dateien nicht in Teile von knapp 1 GB zerlegen.
@@ -275,6 +278,7 @@ impl App {
                     "folder" => OutputKind::Folder,
                     "vob" => OutputKind::Vob,
                     "mpeg" => OutputKind::Mpeg,
+                    "mkv" => OutputKind::Mkv,
                     "burn" => OutputKind::Burn,
                     _ => OutputKind::Iso,
                 };
@@ -1190,6 +1194,25 @@ impl App {
                     d.kind = OutputKind::Vob;
                 }
             }
+            ("mkv", 5) => {
+                self.open_backup_dialog();
+                if let Some(d) = self.backup_dlg.as_mut() {
+                    d.kind = OutputKind::Mkv;
+                }
+            }
+            ("chaptercuts", 5) => {
+                // Wie "allcuts", mit Kapitelmarken an den Schnitten
+                self.dev_state = Some("allcuts".into());
+                self.apply_dev_state(ctx);
+                self.plan.chapters_at_cuts = true;
+                self.dev_state = Some("chaptercuts".into());
+            }
+            ("chaptercuts", 40) => {
+                self.update_program();
+                self.preview.program = true;
+                self.preview.prog_cur = 0;
+                self.preview.prog_seek = self.preview.prog.first().map(|c| c.1);
+            }
             ("nosplit", 5) => {
                 self.open_backup_dialog();
                 if let Some(d) = self.backup_dlg.as_mut() {
@@ -1457,6 +1480,7 @@ impl eframe::App for App {
                 OutputKind::Folder => "folder",
                 OutputKind::Vob => "vob",
                 OutputKind::Mpeg => "mpeg",
+                OutputKind::Mkv => "mkv",
                 OutputKind::Burn => "burn",
                 OutputKind::Iso => "iso",
             }

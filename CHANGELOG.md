@@ -2,6 +2,12 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.018 · 2026-11-12 09:40
+
+- Neue Ausgabe „MKV“ im Export: Bild und eine Tonspur wie bei MPEG-2, ohne Neukodierung, aber als Matroska-Datei mit Kapiteln. VLC, Kodi und viele Fernseher zeigen die Kapitel an. Mit „An Schnitten Kapitelmarken einfügen“ beginnt an jedem Schnitt ein Kapitel, dazu kommen eigene Marken bzw. die Kapitel der DVD. VOB- und MPEG-Dateien können grundsätzlich keine Kapitel enthalten.
+- „An Schnitten Kapitelmarken einfügen“ ist jetzt sichtbar: In „Alle Schnitte“ zeigt die Zeitleiste die Übergänge als Kapitelmarken, und unter dem Häkchen steht, wie viele Kapitel entstehen.
+- „Backup erstellen“ heißt jetzt „Exportieren …“, auch im Dialog („Export starten“, „Export fertig“ usw.).
+
 ## 1.0.017 · 2026-11-11 20:17
 
 - Neue Option „An Schnitten Kapitelmarken einfügen“ unter Kapitelmarken: Alle Einträge der Liste „Neue DVD“ laufen als ein Titel nahtlos hintereinander, und jeder Eintrag beginnt ein Kapitel. Weiter und Zurück am Player springen so von Schnitt zu Schnitt. Eigene Marken und die Kapitel der DVD innerhalb der Einträge bleiben erhalten. Einträge mit anderem Bild- oder Tonformat beginnen einen neuen Titel. Die Einstellung wird im Projekt gespeichert und gilt für DVD-Ordner, ISO und Brennen.

@@ -127,7 +127,7 @@ impl App {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if has_disc {
                             let ok = self.can_start_backup();
-                            if primary_button(ui, &p, &trf!("{}  Backup erstellen", "{}  Create backup", ic::DOWNLOAD_SIMPLE), ok)
+                            if primary_button(ui, &p, &trf!("{}  Exportieren …", "{}  Export …", ic::DOWNLOAD_SIMPLE), ok)
                                 .clicked()
                             {
                                 self.open_backup_dialog();
@@ -1344,7 +1344,13 @@ impl App {
         if self.plan.chapters_at_cuts && several {
             let groups = self.plan.title_groups(disc);
             let text = if groups.len() == 1 {
-                trf!("Die neue DVD hat einen Titel mit {} Schnitten.", "The new DVD has one title with {} cuts.", self.plan.reauthor.len())
+                let chapters: usize = self.plan.reauthor.iter().map(|e| e.chapter_count(disc)).sum();
+                trf!(
+                    "Ein Titel aus {} Schnitten, {} (auch in MKV-Dateien). In „Alle Schnitte“ zeigt die Zeitleiste die Kapitelanfänge.",
+                    "One title from {} cuts, {} (also in MKV files). In “All cuts” the timeline shows where chapters begin.",
+                    self.plan.reauthor.len(),
+                    discslim::i18n::chapters(chapters)
+                )
             } else {
                 trf!("Die neue DVD hat {} Titel (verschiedene Formate).", "The new DVD has {} titles (different formats).", groups.len())
             };

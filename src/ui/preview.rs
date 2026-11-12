@@ -59,6 +59,8 @@ pub struct PreviewState {
     pub program: bool,
     /// Abschnitte: Eintrag, Anfang, Ende, bildgenau
     pub prog: Vec<(usize, f64, f64, bool)>,
+    /// "An Schnitten Kapitelmarken": Übergänge als Kapitel zeigen
+    pub chapter_cuts: bool,
     pub prog_cur: usize,
     /// Nach dem Wechsel zum nächsten Abschnitt: dorthin springen, weiterspielen?
     pub prog_seek: Option<f64>,
@@ -531,6 +533,7 @@ impl App {
 
     pub(super) fn sync_preview(&mut self) {
         self.update_program();
+        self.preview.chapter_cuts = self.plan.chapters_at_cuts && self.plan.reauthor.len() > 1;
         // Bei "Alle Schnitte" ist immer der laufende Eintrag gewählt
         if self.preview.program && self.plan.mode == discslim::engine::plan::Mode::Reauthor {
             if let Some(c) = self.preview.prog.get(self.preview.prog_cur) {
@@ -910,13 +913,15 @@ impl App {
         let fill = Rect::from_min_size(track.min, Vec2::new(track.width() * shown, track.height()));
         ui.painter().rect_filled(fill, CornerRadius::same(3), p.accent);
         if prog_mode {
-            // Grenzen zwischen den Abschnitten
+            // Grenzen zwischen den Abschnitten; mit "An Schnitten Kapitelmarken" als
+            // Kapitelmarke (Farbe der Kapitel, etwas höher)
             let (offs, _) = st.prog_offsets();
+            let (color, reach) = if st.chapter_cuts { (p.subs, 7.0) } else { (p.good, 5.0) };
             for o in offs.iter().skip(1) {
                 let x = track.left() + track.width() * (*o as f32 / span).min(1.0);
                 ui.painter().line_segment(
-                    [egui::pos2(x, track.top() - 5.0), egui::pos2(x, track.bottom() + 5.0)],
-                    egui::Stroke::new(2.5, p.good),
+                    [egui::pos2(x, track.top() - reach), egui::pos2(x, track.bottom() + reach)],
+                    egui::Stroke::new(2.5, color),
                 );
             }
         } else {
@@ -936,7 +941,11 @@ impl App {
                 let (offs, _) = st.prog_offsets();
                 let g = f64::from(f * span);
                 let k = offs.iter().rposition(|o| *o <= g).unwrap_or(0);
-                resp.clone().on_hover_text(trf!("Eintrag {} · {}", "Entry {} · {}", k + 1, fmt_time(g as u64)));
+                if st.chapter_cuts {
+                    resp.clone().on_hover_text(trf!("Eintrag {} · {} · beginnt ein Kapitel", "Entry {} · {} · starts a chapter", k + 1, fmt_time(g as u64)));
+                } else {
+                    resp.clone().on_hover_text(trf!("Eintrag {} · {}", "Entry {} · {}", k + 1, fmt_time(g as u64)));
+                }
             } else {
                 // Kapitel unter dem Mauszeiger nennen
                 let at = (lo + f64::from(f * span)) as u64;

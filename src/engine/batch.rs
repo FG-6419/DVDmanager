@@ -81,7 +81,7 @@ impl BatchItem {
     pub fn output_path(&self) -> &std::path::Path {
         match &self.output {
             Output::Folder(p) | Output::Iso(p) | Output::Burn(p) | Output::Vob(p) => p,
-            Output::Mpeg { path, .. } => path,
+            Output::Mpeg { path, .. } | Output::Mkv { path, .. } => path,
         }
     }
 }

@@ -107,6 +107,7 @@ impl App {
             iso: file_base.join(format!("{label}.iso")).display().to_string(),
             vob: file_base.join(format!("{label}.vob")).display().to_string(),
             mpg: file_base.join(format!("{label}.mpg")).display().to_string(),
+            mkv: file_base.join(format!("{label}.mkv")).display().to_string(),
             mpeg_audio: None,
             no_split: self.prefs.no_split,
             vob_sel,
@@ -213,7 +214,7 @@ impl App {
         let start_dir = self.save_start_dir();
         let dlg = self.backup_dlg.as_mut().unwrap();
         modal(ctx, &p, "backup", 560.0, |ui| {
-            ui.label(RichText::new(tr!("Backup erstellen", "Create backup")).family(semibold()).size(20.0));
+            ui.label(RichText::new(tr!("Exportieren", "Export")).family(semibold()).size(20.0));
             ui.add_space(4.0);
             let width = ui.available_width();
             let opts = [
@@ -221,6 +222,7 @@ impl App {
                 (OutputKind::Folder, tr!("Ordner", "Folder")),
                 (OutputKind::Vob, tr!("VOB-Datei", "VOB file")),
                 (OutputKind::Mpeg, "MPEG-2"),
+                (OutputKind::Mkv, "MKV"),
                 (OutputKind::Burn, tr!("Brennen", "Burn")),
             ];
             segmented(ui, &p, &mut dlg.kind, &opts, width);
@@ -231,6 +233,7 @@ impl App {
                 OutputKind::Burn => tr!("Legt ein ISO-Abbild an und öffnet danach den Windows-Brenner.", "Creates an ISO image and then opens the Windows disc burner."),
                 OutputKind::Vob => tr!("Schreibt die gewählten Titel nacheinander in eine einzige VOB-Datei, ohne DVD-Struktur und Menüs.", "Writes the chosen titles one after another into a single VOB file, without DVD structure and menus."),
                 OutputKind::Mpeg => tr!("Schreibt die gewählten Titel als schlichte MPEG-2-Datei: nur Bild und eine Tonspur, ohne DVD-Navigation und Untertitel.", "Writes the chosen titles as a plain MPEG-2 file: video and one audio track only, without DVD navigation and subtitles."),
+                OutputKind::Mkv => tr!("Wie MPEG-2 (Bild und eine Tonspur, ohne Neukodierung), aber als MKV-Datei mit Kapiteln. VLC, Kodi und viele Fernseher zeigen die Kapitel an.", "Like MPEG-2 (video and one audio track, no re-encoding), but as an MKV file with chapters. VLC, Kodi and many TVs show the chapters."),
             };
             ui.label(RichText::new(hint).size(13.0).color(p.muted));
             ui.add_space(4.0);
@@ -239,10 +242,12 @@ impl App {
                 let is_folder = dlg.kind == OutputKind::Folder;
                 let is_vob = dlg.kind == OutputKind::Vob;
                 let is_mpeg = dlg.kind == OutputKind::Mpeg;
+                let is_mkv = dlg.kind == OutputKind::Mkv;
                 let value = match dlg.kind {
                     OutputKind::Folder => &mut dlg.folder,
                     OutputKind::Vob => &mut dlg.vob,
                     OutputKind::Mpeg => &mut dlg.mpg,
+                    OutputKind::Mkv => &mut dlg.mkv,
                     _ => &mut dlg.iso,
                 };
                 let edit = egui::TextEdit::singleline(value)
@@ -258,7 +263,9 @@ impl App {
                             *value = f.display().to_string();
                         }
                     } else {
-                        let mut d = if is_mpeg {
+                        let mut d = if is_mkv {
+                            rfd::FileDialog::new().set_title(tr!("MKV-Datei speichern", "Save MKV file")).add_filter("Matroska", &["mkv"])
+                        } else if is_mpeg {
                             rfd::FileDialog::new().set_title(tr!("MPEG-2-Datei speichern", "Save MPEG-2 file")).add_filter("MPEG-2", &["mpg", "mpeg"])
                         } else if is_vob {
                             rfd::FileDialog::new().set_title(tr!("VOB-Datei speichern", "Save VOB file")).add_filter(tr!("VOB-Datei", "VOB file"), &["vob"])
@@ -277,7 +284,7 @@ impl App {
                 }
             });
 
-            if matches!(dlg.kind, OutputKind::Vob | OutputKind::Mpeg) {
+            if matches!(dlg.kind, OutputKind::Vob | OutputKind::Mpeg | OutputKind::Mkv) {
                 ui.add_space(8.0);
                 ui.label(RichText::new(tr!("Titel für die Datei", "Titles for the file")).family(semibold()).size(13.0).color(p.muted));
                 egui::ScrollArea::vertical().id_salt("vob-titel").max_height(132.0).show(ui, |ui| {
@@ -303,7 +310,7 @@ impl App {
             if !full_done {
                 dlg.deep = deep;
             }
-            if dlg.kind == OutputKind::Mpeg {
+            if matches!(dlg.kind, OutputKind::Mpeg | OutputKind::Mkv) {
                 // Tonspur wählen (aus dem ersten gewählten Titel)
                 let tracks = first_selected_tracks(&disc, &self.plan, &dlg.vob_sel);
                 if dlg.mpeg_audio.is_none_or(|ph| !tracks.iter().any(|t| t.0 == ph)) {
@@ -320,7 +327,7 @@ impl App {
                 });
             }
             match dlg.kind {
-                OutputKind::Vob | OutputKind::Mpeg => {
+                OutputKind::Vob | OutputKind::Mpeg | OutputKind::Mkv => {
                     style::check(ui, &p, &mut dlg.vob_keep_target, tr!("Automatik hält auch hier die Zielgröße ein", "Automatic mode keeps the target size here too"));
                 }
                 _ => {
@@ -330,7 +337,7 @@ impl App {
                     }
                 }
             }
-            if self.plan.mode == Mode::Reauthor || matches!(dlg.kind, OutputKind::Vob | OutputKind::Mpeg) {
+            if self.plan.mode == Mode::Reauthor || matches!(dlg.kind, OutputKind::Vob | OutputKind::Mpeg | OutputKind::Mkv) {
                 style::check(ui, &p, &mut self.prefs.declick, tr!("Ton an Schnittstellen ganz kurz weich blenden (gegen Knacken)", "Briefly soften the audio at cut points (prevents clicks)"));
             }
             style::check(ui, &p, &mut self.prefs.verify, tr!("Ausgabe danach prüfen (Tonrahmen und Zeitstempel)", "Check the output afterwards (audio frames and timestamps)"));
@@ -356,7 +363,7 @@ impl App {
             }
 
             ui.add_space(8.0);
-            let est = if matches!(dlg.kind, OutputKind::Vob | OutputKind::Mpeg) {
+            let est = if matches!(dlg.kind, OutputKind::Vob | OutputKind::Mpeg | OutputKind::Mkv) {
                 self.plan.for_single_file(&disc, &dlg.vob_sel, dlg.vob_keep_target).estimate(&disc)
             } else {
                 self.plan.estimate(&disc)
@@ -368,6 +375,7 @@ impl App {
                 OutputKind::Folder => &dlg.folder,
                 OutputKind::Vob => &dlg.vob,
                 OutputKind::Mpeg => &dlg.mpg,
+                OutputKind::Mkv => &dlg.mkv,
                 _ => &dlg.iso,
             });
             // ISO entsteht über einen Arbeitsordner und braucht vorübergehend doppelt so viel Platz.
@@ -393,12 +401,12 @@ impl App {
             }
             let _ = is_file;
             let path_ok = !target_path.as_os_str().is_empty()
-                && (!matches!(dlg.kind, OutputKind::Vob | OutputKind::Mpeg) || dlg.vob_sel.iter().any(|on| *on));
+                && (!matches!(dlg.kind, OutputKind::Vob | OutputKind::Mpeg | OutputKind::Mkv) || dlg.vob_sel.iter().any(|on| *on));
 
             ui.add_space(10.0);
             ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
                 let ok = path_ok && !blocked;
-                if primary_button(ui, &p, &trf!("{}  Backup starten", "{}  Start backup", ic::PLAY), ok).clicked() {
+                if primary_button(ui, &p, &trf!("{}  Export starten", "{}  Start export", ic::PLAY), ok).clicked() {
                     start = true;
                 }
                 // Die Warteschlange prüft den Platz erst, wenn sie den Eintrag abarbeitet.
@@ -552,6 +560,10 @@ impl App {
                 self.prefs.file_dir = parent_of(&dlg.mpg);
                 self.prefs.file_dir.clone()
             }
+            OutputKind::Mkv => {
+                self.prefs.file_dir = parent_of(&dlg.mkv);
+                self.prefs.file_dir.clone()
+            }
             _ => {
                 self.prefs.file_dir = parent_of(&dlg.iso);
                 self.prefs.file_dir.clone()
@@ -564,8 +576,9 @@ impl App {
             OutputKind::Burn => Output::Burn(with_iso_ext(&dlg.iso)),
             OutputKind::Vob => Output::Vob(with_ext(&dlg.vob, "vob")),
             OutputKind::Mpeg => Output::Mpeg { path: with_ext(&dlg.mpg, "mpg"), audio: dlg.mpeg_audio },
+            OutputKind::Mkv => Output::Mkv { path: with_ext(&dlg.mkv, "mkv"), audio: dlg.mpeg_audio },
         };
-        let plan = if matches!(dlg.kind, OutputKind::Vob | OutputKind::Mpeg) {
+        let plan = if matches!(dlg.kind, OutputKind::Vob | OutputKind::Mpeg | OutputKind::Mkv) {
             self.plan.for_single_file(disc, &dlg.vob_sel, dlg.vob_keep_target)
         } else {
             let mut plan = self.plan.clone();
@@ -587,7 +600,7 @@ impl App {
         let (fraction, stage, sectors, ratio, elapsed) =
             (j.fraction, j.stage.clone(), j.sectors_out, j.ratio, j.started.elapsed().as_secs_f64());
         modal(ctx, &p, "job", 500.0, |ui| {
-            ui.label(RichText::new(tr!("Backup läuft", "Backup running")).family(semibold()).size(20.0));
+            ui.label(RichText::new(tr!("Export läuft", "Export running")).family(semibold()).size(20.0));
             ui.add_space(2.0);
             ui.label(RichText::new(stage).size(14.0).color(p.muted));
             ui.add_space(8.0);
@@ -636,7 +649,7 @@ impl App {
             JobResult::Ok(s) => {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(ic::CHECK_CIRCLE).size(28.0).color(p.good));
-                    ui.label(RichText::new(tr!("Backup fertig", "Backup finished")).family(semibold()).size(20.0));
+                    ui.label(RichText::new(tr!("Export fertig", "Export finished")).family(semibold()).size(20.0));
                 });
                 ui.add_space(4.0);
                 ui.label(
@@ -736,7 +749,7 @@ impl App {
             JobResult::Failed(e) => {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(ic::X_CIRCLE).size(28.0).color(p.bad));
-                    ui.label(RichText::new(tr!("Backup fehlgeschlagen", "Backup failed")).family(semibold()).size(20.0));
+                    ui.label(RichText::new(tr!("Export fehlgeschlagen", "Export failed")).family(semibold()).size(20.0));
                 });
                 ui.add_space(4.0);
                 ui.label(RichText::new(e).color(p.muted));
@@ -748,7 +761,7 @@ impl App {
                 });
             }
             JobResult::Cancelled => {
-                ui.label(RichText::new(tr!("Backup abgebrochen", "Backup cancelled")).family(semibold()).size(20.0));
+                ui.label(RichText::new(tr!("Export abgebrochen", "Export cancelled")).family(semibold()).size(20.0));
                 ui.label(RichText::new(tr!("Angefangene Dateien wurden entfernt.", "Partially written files have been removed.")).color(p.muted));
                 ui.add_space(10.0);
                 ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
@@ -811,7 +824,7 @@ impl App {
             ui.label(RichText::new(tr!("Verzeichnisse", "Folders")).family(semibold()).size(13.0).color(p.muted));
             for (label, value, title) in [
                 (tr!("Laden", "Load"), &mut self.prefs.load_dir, tr!("Hauptverzeichnis zum Laden von DVDs, ISOs und Projekten", "Main folder for loading DVDs, ISOs and projects")),
-                (tr!("Speichern", "Save"), &mut self.prefs.save_dir, tr!("Hauptverzeichnis für Backups", "Main folder for backups")),
+                (tr!("Speichern", "Save"), &mut self.prefs.save_dir, tr!("Hauptverzeichnis für Exporte", "Main folder for exports")),
                 (tr!("Projekte", "Projects"), &mut self.prefs.project_dir, tr!("Ordner zum Laden und Speichern von Projekten", "Folder for loading and saving projects")),
             ] {
                 ui.horizontal(|ui| {
@@ -848,7 +861,7 @@ impl App {
 
             ui.add_space(6.0);
             ui.label(RichText::new("Backup").family(semibold()).size(13.0).color(p.muted));
-            style::check(ui, &p, &mut self.prefs.deep_default, tr!("Tiefenanalyse vor dem Backup vorschlagen", "Suggest deep analysis before backup"));
+            style::check(ui, &p, &mut self.prefs.deep_default, tr!("Tiefenanalyse vor dem Export vorschlagen", "Suggest deep analysis before export"));
 
             ui.add_space(10.0);
             ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
@@ -980,6 +993,10 @@ fn existing_files(d: &BackupDialog) -> Vec<String> {
         }
         OutputKind::Mpeg => {
             let p = with_ext(&d.mpg, "mpg");
+            if p.exists() { vec![p.display().to_string()] } else { Vec::new() }
+        }
+        OutputKind::Mkv => {
+            let p = with_ext(&d.mkv, "mkv");
             if p.exists() { vec![p.display().to_string()] } else { Vec::new() }
         }
         OutputKind::Vob => {
