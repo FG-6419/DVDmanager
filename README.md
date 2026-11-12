@@ -1,49 +1,51 @@
 # DVDmanager
 
-DVDmanager ist ein Windows-Programm für **eigene, ungeschützte Video-DVDs**. Es verkleinert DVDs auf Rohlinggröße, stellt Titel neu zusammen, schneidet sie und gibt sie als DVD, ISO oder Videodatei aus. Bild und Ton werden dabei nicht neu kodiert, nur an bildgenauen Schnittstellen und Blenden.
+**English** | [Deutsch](README.de.md)
 
-Kopiergeschützte DVDs (CSS) verarbeitet das Programm bewusst nicht.
+DVDmanager is a Windows program for **your own, unprotected video DVDs**. It shrinks DVDs to fit a blank disc, rearranges titles, cuts them and writes the result as a DVD, an ISO image or a video file. Video and audio are not re-encoded, except at frame-accurate cut points and fades.
 
-## Was es kann
+The program deliberately does not process copy-protected DVDs (CSS).
 
-**Verkleinern (Ganze DVD)**
-- Passt eine DVD 9 auf einen DVD-5-Rohling (4,7 GB) oder auf eine eigene Zielgröße an.
-- Das Bild wird neu quantisiert statt neu kodiert, Menüs und Struktur bleiben erhalten.
-- Pro Titel, Tonspur und Untertitel lässt sich einstellen, was bleibt und wie stark verkleinert wird.
+## Features
 
-**Neu zusammenstellen**
-- Titel und Kapitel in eigener Reihenfolge zu einer neuen DVD zusammenstellen.
-- Schneiden am Schlüsselbild (ohne Neukodierung) oder bildgenau.
-- Blenden aus und nach Schwarz oder Weiß, auf Wunsch mit Ton.
-- Szenenerkennung: einen Titel an Szenenwechseln teilen.
-- Kapitel-Editor mit eigenen Kapitelmarken. Auf Wunsch steht an jedem Schnitt eine Kapitelmarke, und alle Schnitte laufen als ein Titel.
-- Saubere Schnittstellen im Ton: angeschnittene Tonrahmen werden entfernt, eine kurze Blende verhindert Knacken.
+**Shrink (whole DVD)**
+- Fits a DVD 9 onto a DVD 5 blank (4.7 GB) or onto a custom target size.
+- Video is requantized instead of re-encoded; menus and structure are kept.
+- For each title, audio track and subtitle you choose what to keep and how much to shrink.
 
-**Quellen**
-- DVD-Laufwerk, VIDEO_TS-Ordner, ISO-Abbild.
-- Einzelne VOB- und MPEG-2-Dateien. Sie werden ohne Neukodierung in eine DVD-Struktur umgepackt.
+**Re-author**
+- Combine titles and chapters into a new DVD in your own order.
+- Cut at keyframes (no re-encoding) or frame-accurately.
+- Fades from and to black or white, optionally including the audio.
+- Scene detection: split a title at scene changes.
+- Chapter editor with your own chapter markers. Optionally every cut starts a chapter, and all cuts play as one title.
+- Clean audio at cut points: partial audio frames are removed, and a short fade prevents clicks.
 
-**Ausgabe**
-- DVD-Ordner (VIDEO_TS), ISO-Abbild oder direkt auf Rohling (über den Windows-Brenner).
-- Eine VOB-Datei, eine schlichte MPEG-2-Datei oder eine MKV-Datei mit Kapiteln.
-- Nach dem Export wird die Ausgabe automatisch auf beschädigte Tonrahmen und Zeitsprünge geprüft.
-- Auf Wunsch entsteht ein Übersichtsbild (JPG) mit Vorschaubildern in einstellbarem Abstand.
+**Sources**
+- DVD drive, VIDEO_TS folder, ISO image.
+- Single VOB and MPEG-2 files. They are repacked into a DVD structure without re-encoding.
 
-**Bedienung**
-- Vorschau mit Ton und Zeitleiste, „Alle Schnitte abspielen“ und „Übergang anhören“.
-- Projekte speichern und laden, Warteschlange für mehrere DVDs.
-- Oberfläche auf Deutsch und Englisch, hell und dunkel.
+**Output**
+- DVD folder (VIDEO_TS), ISO image, or straight to a blank disc (via the Windows disc burner).
+- A single VOB file, a plain MPEG-2 file or an MKV file with chapters.
+- After the export, the output is checked automatically for broken audio frames and time jumps.
+- Optionally an overview picture (JPG) with thumbnails at an adjustable interval.
 
-## Bauen
+**Usage**
+- Preview with audio and timeline, "Play all cuts" and "Listen to transition".
+- Save and load projects, queue for several DVDs.
+- User interface in German and English, light and dark.
 
-Benötigt wird [Rust](https://www.rust-lang.org/) (stabile Version).
+## Building
+
+You need [Rust](https://www.rust-lang.org/) (stable).
 
 ```bash
 cargo build --release
 ```
 
-Das Programm liegt danach unter `target/release/dvdmanager.exe`. Die Tests laufen mit `cargo test` und nutzen eine eingebaute Beispiel-DVD.
+The program is then at `target/release/dvdmanager.exe`. Run the tests with `cargo test`; they use a built-in sample DVD.
 
-## Änderungen
+## Changes
 
-Was sich in welcher Version geändert hat, steht in [CHANGELOG.md](CHANGELOG.md) und im Programm unter „Über“.
+What changed in which version is listed in [CHANGELOG.md](CHANGELOG.md) (in German) and in the program under "About".
