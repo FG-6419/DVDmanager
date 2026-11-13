@@ -852,6 +852,11 @@ impl App {
                 }
             }
         }
+        // Einstellung „Titel bei Klicken automatisch abspielen“: auch Einträge der neuen DVD
+        // (geschnitten oder zerlegt) starten gleich, ab dem Schnittanfang. Nicht bei Mehrfachauswahl.
+        if self.prefs.autoplay && !toggle && !range {
+            self.preview.prog_play = Some(true);
+        }
     }
 
     /// Einträge, die eine Aktion betrifft: die markierten, sonst der gewählte.

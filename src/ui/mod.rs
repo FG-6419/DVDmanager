@@ -1162,7 +1162,20 @@ impl App {
                     self.frames = 100; // Prüfbild erst nach dem Anhalten
                 }
             }
-            ("allcuts", 5) => {
+            ("autoplay", 40) => {
+                // Einstellung an, Klick auf den zweiten (geschnittenen) Eintrag der neuen DVD
+                self.prefs.autoplay = true;
+                self.click_entry(1, false, false);
+            }
+            ("autoplay", n) if n > 40 && n % 10 == 0 => {
+                if let Ok(log) = std::env::var("DISCSLIM_DEV_LOG") {
+                    use std::io::Write;
+                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log) {
+                        let _ = writeln!(f, "Bild {n}: gewählt {:?} {}", self.sel, self.preview.dev_status());
+                    }
+                }
+            }
+            ("allcuts" | "autoplay", 5) => {
                 self.plan.mode = discslim::engine::plan::Mode::Reauthor;
                 if let Some(d) = self.disc.clone() {
                     for (i, t) in d.titles.iter().enumerate() {

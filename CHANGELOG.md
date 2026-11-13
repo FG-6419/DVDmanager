@@ -2,6 +2,10 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.021 · 2026-11-13 12:04
+
+- „Titel bei Klicken automatisch abspielen“ gilt jetzt auch für die Liste „Neue DVD“: Ein Klick auf einen hinzugefügten, geschnittenen oder zerlegten Eintrag spielt ihn gleich ab dem Schnittanfang ab. Strg+Klick und Umschalt+Klick (Mehrfachauswahl) starten nichts.
+
 ## 1.0.020 · 2026-11-13 11:48
 
 - Neue Einstellung „Titel bei Klicken automatisch abspielen“ (Einstellungen → Vorschau): Ein Klick auf einen Titel in der Liste links lädt ihn und spielt ihn sofort ab, mit Ton. Gilt für die Titelliste bei „Neu zusammenstellen“ und bei „Ganze DVD“. Standardmäßig aus.
