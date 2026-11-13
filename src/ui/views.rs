@@ -257,7 +257,7 @@ impl App {
                     // Drei Knöpfe nebeneinander, mittig
                     let labels = [
                         trf!("{}  Projekt öffnen", "{}  Open project", ic::FLOPPY_DISK),
-                        trf!("{}  Mehrere DVDs nacheinander", "{}  Several DVDs in a row", ic::QUEUE),
+                        trf!("{}  Warteschlange abarbeiten", "{}  Process queue", ic::QUEUE),
                         trf!("{}  Beispiel-DVD ausprobieren", "{}  Try a sample DVD", ic::SPARKLE),
                     ];
                     let font = egui::FontId::proportional(14.0);

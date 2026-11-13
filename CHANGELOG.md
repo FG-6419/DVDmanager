@@ -2,6 +2,11 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.019 · 2026-11-13 10:15
+
+- Startseite: „Mehrere DVDs nacheinander“ heißt jetzt „Warteschlange abarbeiten“.
+- Exportierte Dateien behalten den Namen der Quelle und bekommen nur „_converted“ angehängt: Aus Test.vob wird Test_converted.vob (bisher „Test (klein).vob“). Punkte, Klammern und andere in Windows erlaubte Zeichen bleiben im Namen erhalten. Gilt auch für ISO, DVD-Ordner, MPEG, MKV und die Warteschlange.
+
 ## 1.0.018 · 2026-11-12 09:40
 
 - Neue Ausgabe „MKV“ im Export: Bild und eine Tonspur wie bei MPEG-2, ohne Neukodierung, aber als Matroska-Datei mit Kapiteln. VLC, Kodi und viele Fernseher zeigen die Kapitel an. Mit „An Schnitten Kapitelmarken einfügen“ beginnt an jedem Schnitt ein Kapitel, dazu kommen eigene Marken bzw. die Kapitel der DVD. VOB- und MPEG-Dateien können grundsätzlich keine Kapitel enthalten.

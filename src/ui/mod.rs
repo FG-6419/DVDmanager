@@ -1257,7 +1257,7 @@ impl App {
                     ("KINDERGEBURTSTAG", Status::Waiting, 0.0),
                     ("WEIHNACHTEN", Status::Waiting, 0.0),
                 ] {
-                    let mut it = BatchItem::new(src.clone(), label.into(), PlanSource::Auto(auto.clone()), discslim::engine::backup::Output::Iso(PathBuf::from(format!("C:\\Videos\\{label} (klein).iso"))), false);
+                    let mut it = BatchItem::new(src.clone(), label.into(), PlanSource::Auto(auto.clone()), discslim::engine::backup::Output::Iso(PathBuf::from(format!("C:\\Videos\\{label}_converted.iso"))), false);
                     it.status = status;
                     it.fraction = f;
                     it.stage = "Titelset 1".into();

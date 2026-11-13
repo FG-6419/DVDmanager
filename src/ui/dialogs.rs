@@ -950,24 +950,20 @@ pub(super) fn dirs_home() -> PathBuf {
     std::env::var_os("USERPROFILE").map(PathBuf::from).unwrap_or_else(std::env::temp_dir)
 }
 
-/// Dateiname aus der Bezeichnung einer DVD (ohne Zusatz).
+/// Dateiname aus der Bezeichnung einer DVD bzw. dem Namen der Quelldatei (ohne Zusatz).
+/// Nur Zeichen, die Windows in Dateinamen nicht erlaubt, werden ersetzt.
 pub(super) fn file_stem(label: &str) -> String {
     let s: String = label
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' { c } else { '_' })
+        .map(|c| if c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') { '_' } else { c })
         .collect();
-    let s = s.trim().to_string();
+    let s = s.trim().trim_end_matches('.').trim_end().to_string();
     if s.is_empty() { "DVD".into() } else { s }
 }
 
-/// Name für das Ergebnis eines Backups.
+/// Name für das Ergebnis eines Exports: Name der Quelle mit „_converted“ (Test.vob → Test_converted.vob).
 pub(super) fn sanitize(label: &str) -> String {
-    let s = file_stem(label);
-    if s == "DVD" && label.trim().is_empty() {
-        s
-    } else {
-        trf!("{s} (klein)", "{s} (small)")
-    }
+    format!("{}_converted", file_stem(label))
 }
 
 /// Dateien, die das Backup am gewählten Ziel ersetzen würde.
