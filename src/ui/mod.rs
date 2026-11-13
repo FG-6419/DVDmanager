@@ -152,6 +152,8 @@ pub struct Prefs {
     pub verify: bool,
     pub sheet: bool,
     pub sheet_secs: u32,
+    /// Titel in der Liste links beim Anklicken gleich abspielen
+    pub autoplay: bool,
 }
 
 impl Default for Prefs {
@@ -184,6 +186,7 @@ impl Default for Prefs {
             verify: true,
             sheet: false,
             sheet_secs: 60,
+            autoplay: false,
         }
     }
 }
@@ -268,6 +271,9 @@ impl App {
             }
             if let Some(v) = st.get_string("deep") {
                 prefs.deep_default = v == "1";
+            }
+            if let Some(v) = st.get_string("autoplay") {
+                prefs.autoplay = v == "1";
             }
             if let Some(v) = st.get_string("custom_mb").and_then(|v| v.parse().ok()) {
                 prefs.custom_mb = v;
@@ -1471,6 +1477,7 @@ impl eframe::App for App {
         storage.set_string("lang", self.prefs.lang.clone());
         storage.set_string("only_lang", flag(self.prefs.only_lang));
         storage.set_string("deep", flag(self.prefs.deep_default));
+        storage.set_string("autoplay", flag(self.prefs.autoplay));
         // Die kleine Zielgröße der Beispiel-DVD nicht als Vorgabe behalten
         let (kind, mb) = self.target_before_sample.unwrap_or((self.prefs.target_kind, self.prefs.custom_mb));
         storage.set_string("custom_mb", mb.to_string());

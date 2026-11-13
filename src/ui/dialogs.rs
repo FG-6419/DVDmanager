@@ -805,6 +805,10 @@ impl App {
             segmented(ui, &p, &mut dark, &opts, width);
 
             ui.add_space(6.0);
+            ui.label(RichText::new(tr!("Vorschau", "Preview")).family(semibold()).size(13.0).color(p.muted));
+            style::check(ui, &p, &mut self.prefs.autoplay, tr!("Titel bei Klicken automatisch abspielen", "Play titles automatically when clicked"));
+
+            ui.add_space(6.0);
             ui.label(RichText::new(tr!("Ton- und Untertitelsprache", "Audio and subtitle language")).family(semibold()).size(13.0).color(p.muted));
             style::check(ui, &p, &mut self.prefs.only_lang, tr!("Beim Öffnen nur diese Sprache behalten", "Keep only this language when opening"));
             ui.add_enabled_ui(self.prefs.only_lang, |ui| {

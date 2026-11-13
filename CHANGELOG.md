@@ -2,6 +2,10 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.020 · 2026-11-13 11:48
+
+- Neue Einstellung „Titel bei Klicken automatisch abspielen“ (Einstellungen → Vorschau): Ein Klick auf einen Titel in der Liste links lädt ihn und spielt ihn sofort ab, mit Ton. Gilt für die Titelliste bei „Neu zusammenstellen“ und bei „Ganze DVD“. Standardmäßig aus.
+
 ## 1.0.019 · 2026-11-13 10:15
 
 - Startseite: „Mehrere DVDs nacheinander“ heißt jetzt „Warteschlange abarbeiten“.

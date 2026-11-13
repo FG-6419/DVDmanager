@@ -379,6 +379,9 @@ impl App {
                     this.sel = Selection::Item(id);
                     this.preview.dirty = true;
                 }
+                if r.clicked() && this.prefs.autoplay && matches!(id, ItemId::Title(_)) {
+                    this.preview.prog_play = Some(true);
+                }
                 if let ItemId::Title(ti) = id {
                     let chapters = disc.titles.get(ti).map(|t| t.chapters.len()).unwrap_or(0);
                     r.context_menu(|ui| {
@@ -675,6 +678,10 @@ impl App {
                     if r.clicked() && !selected {
                         self.sel = Selection::Source(idx);
                         self.preview.dirty = true;
+                    }
+                    // Einstellung „Titel bei Klicken automatisch abspielen“: startet, sobald die Vorschau steht
+                    if r.clicked() && self.prefs.autoplay {
+                        self.preview.prog_play = Some(true);
                     }
                     let chapters = t.chapters.len();
                     r.context_menu(|ui| {
