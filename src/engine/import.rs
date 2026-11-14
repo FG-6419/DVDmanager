@@ -131,6 +131,7 @@ pub fn import(src: &Path, out: &Path, progress: &mut dyn FnMut(f32, &str) -> boo
             check_container(&chunk[..n])?;
             first = false;
         }
+        crate::engine::live::offer(&chunk[..n]);
         buf.extend_from_slice(&chunk[..n]);
         done += n as u64;
         let used = imp.parse(&buf, false)?;

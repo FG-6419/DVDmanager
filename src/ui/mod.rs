@@ -61,6 +61,8 @@ struct Loader {
     is_sample: bool,
     /// Vorschaubilder der Titel, die schon fertig sind (Nummer, Länge, Bild)
     thumbs: Vec<(usize, u64, egui::TextureHandle)>,
+    /// Mitlaufendes Vorschaubild
+    live: thumbs::LiveView,
 }
 
 /// Höchstens so viele Vorschaubilder beim Einlesen
@@ -126,6 +128,8 @@ pub struct Job {
     pub fraction: f32,
     pub sectors_out: u64,
     pub ratio: f64,
+    /// Mitlaufendes Vorschaubild
+    pub live: thumbs::LiveView,
 }
 
 pub enum JobResult {
@@ -179,6 +183,8 @@ pub struct Prefs {
     pub thumb_loop_secs: u32,
     /// Dateiendung beim Export groß schreiben: VOB, MPEG (.mpg), MKV
     pub ext: ExtStyle,
+    /// Mitlaufendes Vorschaubild beim Einlesen und beim Export (über den Knopf dort)
+    pub live_preview: bool,
 }
 
 impl Default for Prefs {
@@ -215,6 +221,7 @@ impl Default for Prefs {
             thumb_anim: false,
             thumb_loop_secs: 5,
             ext: ExtStyle::default(),
+            live_preview: false,
         }
     }
 }
@@ -317,6 +324,9 @@ impl App {
             }
             if let Some(v) = st.get_string("thumb_anim") {
                 prefs.thumb_anim = v == "1";
+            }
+            if let Some(v) = st.get_string("live_preview") {
+                prefs.live_preview = v == "1";
             }
             if let Some(v) = st.get_string("thumb_loop_secs").and_then(|v| v.parse::<u32>().ok()) {
                 prefs.thumb_loop_secs = v.clamp(1, 60);
@@ -689,8 +699,12 @@ impl App {
         let cancel = Arc::new(AtomicBool::new(false));
         let c2 = cancel.clone();
         let ctx2 = ctx.clone();
+        let live = thumbs::LiveView::start(self.prefs.live_preview);
+        let frame = live.frame.clone();
         std::thread::spawn(move || {
+            discslim::engine::live::bind(Some(frame));
             let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&tx, &c2)));
+            discslim::engine::live::bind(None);
             let msg = match res {
                 Ok(Ok(d)) => LoadMsg::Done(Box::new(d)),
                 Ok(Err(e)) => LoadMsg::Failed(e),
@@ -706,12 +720,14 @@ impl App {
             cancel,
             is_sample,
             thumbs: Vec::new(),
+            live,
         });
     }
 
     fn pump_loader(&mut self, ctx: &egui::Context) {
         let Some(l) = self.loader.as_mut() else { return };
         ctx.request_repaint_after(std::time::Duration::from_millis(60));
+        l.live.pump(ctx);
         let mut finished = None;
         while let Ok(m) = l.rx.try_recv() {
             match m {
@@ -839,6 +855,7 @@ impl App {
     fn pump_job(&mut self, ctx: &egui::Context) {
         let Some(j) = self.job.as_mut() else { return };
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        j.live.pump(ctx);
         let mut done = None;
         while let Ok(m) = j.rx.try_recv() {
             match m {
@@ -1224,6 +1241,40 @@ impl App {
                     }
                 }
             }
+            ("live", 5) => {
+                // Fortschrittsfenster mit eingeschaltetem Bild: ein Thread liest die Beispiel-DVD
+                // VOBU für VOBU wie ein Export und bietet die Daten dem Bild an.
+                let Some(disc) = self.disc.clone() else { return };
+                let live = thumbs::LiveView::start(true);
+                let frame = live.frame.clone();
+                std::thread::spawn(move || {
+                    discslim::engine::live::bind(Some(frame));
+                    if let Ok(r) = disc.source.reader(discslim::dvd::source::Space::title(1)) {
+                        let total = r.sectors();
+                        let mut vr = discslim::engine::transcode::VobuReader::new(r, 0, total);
+                        for _ in 0..40 {
+                            if !matches!(vr.next(), Ok(Some(_))) {
+                                break;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                        }
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(20));
+                    discslim::engine::live::bind(None);
+                });
+                let (_tx, rx) = channel();
+                self.job = Some(Job {
+                    rx,
+                    cancel: Arc::new(AtomicBool::new(false)),
+                    started: Instant::now(),
+                    stage: "Titelset 1".into(),
+                    current: String::new(),
+                    fraction: 0.4,
+                    sectors_out: 120_000,
+                    ratio: 0.8,
+                    live,
+                });
+            }
             ("separate", 10) => {
                 // Export-Dialog: MKV als Einzeldateien, ein Eintrag umbenannt
                 if let Some(e) = self.plan.reauthor.get_mut(1) {
@@ -1597,6 +1648,7 @@ impl eframe::App for App {
         storage.set_string("deep", flag(self.prefs.deep_default));
         storage.set_string("autoplay", flag(self.prefs.autoplay));
         storage.set_string("thumb_anim", flag(self.prefs.thumb_anim));
+        storage.set_string("live_preview", flag(self.prefs.live_preview));
         for (i, key) in ["ext_upper_vob", "ext_upper_mpg", "ext_upper_mkv"].iter().enumerate() {
             storage.set_string(key, flag(self.prefs.ext.upper[i]));
         }

@@ -57,6 +57,61 @@ fn shrink(rgba: &[u8], w: usize, h: usize, aspect: f32) -> ColorImage {
     ColorImage::from_rgba_unmultiplied([tw, th], &out)
 }
 
+/// Mitlaufendes Vorschaubild beim Einlesen oder Export. Ein eigener Thread holt etwa alle
+/// Viertelsekunde das zuletzt gelesene Stück ab und dekodiert es; er endet von selbst,
+/// sobald Arbeit und Anzeige vorbei sind.
+pub struct LiveView {
+    pub frame: std::sync::Arc<discslim::engine::live::LiveFrame>,
+    rx: Receiver<ColorImage>,
+    tex: Option<TextureHandle>,
+}
+
+impl LiveView {
+    pub fn start(enabled: bool) -> Self {
+        let frame = discslim::engine::live::LiveFrame::new(enabled);
+        let (tx, rx) = channel();
+        let f2 = frame.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(Duration::from_millis(250));
+            // Nur noch dieser Thread hält das Bild: Arbeit und Anzeige sind vorbei.
+            if std::sync::Arc::strong_count(&f2) <= 1 {
+                return;
+            }
+            let Some(data) = f2.take() else { continue };
+            let img = std::panic::catch_unwind(|| discslim::engine::live::decode(&data)).ok().flatten();
+            if let Some((rgba, w, h)) = img {
+                if tx.send(ColorImage::from_rgba_unmultiplied([w, h], &rgba)).is_err() {
+                    return;
+                }
+            }
+        });
+        Self { frame, rx, tex: None }
+    }
+
+    pub fn enabled(&self) -> bool {
+        self.frame.enabled()
+    }
+
+    pub fn set_enabled(&mut self, on: bool) {
+        self.frame.set_enabled(on);
+        if !on {
+            self.tex = None;
+        }
+    }
+
+    pub fn pump(&mut self, ctx: &egui::Context) {
+        while let Ok(img) = self.rx.try_recv() {
+            if self.frame.enabled() {
+                self.tex = Some(ctx.load_texture("live-bild", img, TextureOptions::LINEAR));
+            }
+        }
+    }
+
+    pub fn texture(&self) -> Option<(egui::TextureId, egui::Vec2)> {
+        self.tex.as_ref().map(|t| (t.id(), t.size_vec2()))
+    }
+}
+
 /// Dekodiert ein einzelnes Bild an einer Stelle und verkleinert es. Blockiert bis zu `timeout`.
 pub fn grab_frame(source: Source, segments: Vec<Segment>, ms: f64, timeout: Duration) -> Option<ColorImage> {
     let handle = preview::spawn(source, segments, 0.0, None, 0, None);

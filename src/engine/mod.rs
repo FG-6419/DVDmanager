@@ -8,6 +8,7 @@ pub mod batch;
 pub mod cut;
 pub mod import;
 pub mod inspect;
+pub mod live;
 pub mod mkv;
 pub mod plan;
 pub mod preview;

@@ -86,6 +86,28 @@ fn longest_title(disc: &Disc) -> usize {
     (0..disc.titles.len()).max_by_key(|i| disc.titles[*i].ms).unwrap()
 }
 
+/// Mitlaufendes Vorschaubild: Die Analyse bietet Daten an, und daraus wird ein Bild, auch
+/// aus einem Stück, das mitten in einem Paket beginnt (wie beim Lesen einer Datei).
+#[test]
+fn live_picture() {
+    use discslim::engine::live;
+    let w = work("livebild");
+    let src = demo::build_sample(&w, |_| {}).unwrap();
+    let frame = live::LiveFrame::new(true);
+    live::bind(Some(frame.clone()));
+    let _disc = open_analysed(&src);
+    live::bind(None);
+    let offered = frame.take().expect("Analyse hat nichts angeboten");
+    let (_, pw, ph) = live::decode(&offered).expect("kein Bild aus der Analyse");
+    assert_eq!(pw, live::LIVE_W);
+    assert!(ph > 8);
+
+    let vob = std::fs::read(src.join("VTS_01_1.VOB")).unwrap();
+    let chunk = &vob[1000..vob.len().min(1000 + 1536 * 1024)];
+    assert!(live::decode(chunk).is_some(), "kein Bild aus einem Datei-Stück");
+    let _ = std::fs::remove_dir_all(&w);
+}
+
 #[test]
 fn custom_chapter_marks() {
     let w = work("kapitel");

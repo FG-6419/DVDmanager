@@ -145,11 +145,12 @@ impl App {
 
         if self.loader.is_some() {
             let mut cancel = false;
-            let (progress, text, thumbs) = {
+            let mut toggle_live = false;
+            let (progress, text, thumbs, live_on, live_tex) = {
                 let l = self.loader.as_ref().unwrap();
                 let thumbs: Vec<(usize, u64, egui::TextureId, Vec2)> =
                     l.thumbs.iter().map(|(n, ms, t)| (*n, *ms, t.id(), t.size_vec2())).collect();
-                (l.progress, l.text.clone(), thumbs)
+                (l.progress, l.text.clone(), thumbs, l.live.enabled(), l.live.texture())
             };
             // Mit Vorschaubildern wird das Fenster breiter, damit drei Bilder nebeneinander passen.
             let width = if thumbs.is_empty() { 420.0 } else { 520.0 };
@@ -157,6 +158,10 @@ impl App {
                 ui.label(RichText::new(text).family(semibold()).size(16.0));
                 ui.add_space(8.0);
                 progress_bar(ui, &p, progress);
+                if live_on {
+                    ui.add_space(12.0);
+                    live_picture(ui, &p, live_tex);
+                }
                 if !thumbs.is_empty() {
                     ui.add_space(12.0);
                     let gap = 10.0;
@@ -185,8 +190,17 @@ impl App {
                     if soft_button(ui, &p, tr!("Abbrechen", "Cancel")).clicked() {
                         cancel = true;
                     }
+                    if live_button(ui, &p, live_on).clicked() {
+                        toggle_live = true;
+                    }
                 });
             });
+            if toggle_live {
+                self.prefs.live_preview = !live_on;
+                if let Some(l) = self.loader.as_mut() {
+                    l.live.set_enabled(!live_on);
+                }
+            }
             if cancel {
                 if let Some(l) = &self.loader {
                     l.cancel.store(true, Ordering::Relaxed);
@@ -571,12 +585,16 @@ impl App {
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel2 = cancel.clone();
         let ctx2 = ctx.clone();
+        let live = super::thumbs::LiveView::start(self.prefs.live_preview);
+        let frame = live.frame.clone();
         std::thread::spawn(move || {
+            discslim::engine::live::bind(Some(frame));
             if reqs.len() == 1 {
                 backup::run(reqs.remove(0), tx, cancel2);
             } else {
                 backup::run_many(reqs, tx, cancel2);
             }
+            discslim::engine::live::bind(None);
             ctx2.request_repaint();
         });
         self.job = Some(Job {
@@ -588,6 +606,7 @@ impl App {
             fraction: 0.0,
             sectors_out: 0,
             ratio: 1.0,
+            live,
         });
     }
 
@@ -703,8 +722,10 @@ impl App {
         let p = self.pal;
         let Some(j) = self.job.as_ref() else { return };
         let mut cancel = false;
+        let mut toggle_live = false;
         let (fraction, stage, sectors, ratio, elapsed) =
             (j.fraction, j.stage.clone(), j.sectors_out, j.ratio, j.started.elapsed().as_secs_f64());
+        let (live_on, live_tex) = (j.live.enabled(), j.live.texture());
         modal(ctx, &p, "job", 500.0, |ui| {
             ui.label(RichText::new(tr!("Export läuft", "Export running")).family(semibold()).size(20.0));
             ui.add_space(2.0);
@@ -732,13 +753,26 @@ impl App {
                 .size(13.0)
                 .color(p.muted),
             );
+            if live_on {
+                ui.add_space(10.0);
+                live_picture(ui, &p, live_tex);
+            }
             ui.add_space(10.0);
             ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
                 if soft_button(ui, &p, tr!("Abbrechen", "Cancel")).clicked() {
                     cancel = true;
                 }
+                if live_button(ui, &p, live_on).clicked() {
+                    toggle_live = true;
+                }
             });
         });
+        if toggle_live {
+            self.prefs.live_preview = !live_on;
+            if let Some(j) = self.job.as_mut() {
+                j.live.set_enabled(!live_on);
+            }
+        }
         if cancel {
             if let Some(j) = self.job.as_ref() {
                 j.cancel.store(true, Ordering::Relaxed);
@@ -1117,6 +1151,44 @@ pub(super) fn sanitize(label: &str) -> String {
 
 /// Dateiendung der Datei-Ausgaben nach den Einstellungen: groß oder klein, bei MPEG-2
 /// außerdem .mpg oder .mpeg.
+/// Knopf zum Ein- und Ausschalten des mitlaufenden Vorschaubildes.
+fn live_button(ui: &mut Ui, p: &style::Pal, on: bool) -> egui::Response {
+    let text = if on {
+        format!("{}  {}", ic::IMAGE, tr!("Bild ausblenden", "Hide picture"))
+    } else {
+        format!("{}  {}", ic::IMAGE, tr!("Bild anzeigen", "Show picture"))
+    };
+    soft_button(ui, p, &text).on_hover_text(tr!(
+        "Zeigt ein kleines Bild der Stelle, die gerade verarbeitet wird.",
+        "Shows a small picture of the part currently being processed."
+    ))
+}
+
+/// Mitlaufendes Vorschaubild, mittig in einer 16:9-Kachel.
+fn live_picture(ui: &mut Ui, p: &style::Pal, tex: Option<(egui::TextureId, Vec2)>) {
+    let w = 240.0f32.min(ui.available_width());
+    ui.vertical_centered(|ui| {
+        let (tile, _) = ui.allocate_exact_size(Vec2::new(w, w * 9.0 / 16.0), egui::Sense::hover());
+        ui.painter().rect_filled(tile, CornerRadius::same(6), p.screen);
+        match tex {
+            Some((id, size)) => {
+                let scale = (tile.width() / size.x.max(1.0)).min(tile.height() / size.y.max(1.0));
+                let r = egui::Rect::from_center_size(tile.center(), size * scale);
+                ui.painter().image(id, r, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+            }
+            None => {
+                ui.painter().text(
+                    tile.center(),
+                    egui::Align2::CENTER_CENTER,
+                    tr!("Bild folgt …", "Picture coming …"),
+                    egui::FontId::proportional(12.0),
+                    p.muted,
+                );
+            }
+        }
+    });
+}
+
 fn file_ext(kind: OutputKind, style: &ExtStyle) -> String {
     let (ext, up) = match kind {
         OutputKind::Mpeg if style.mpeg_long => ("mpeg", style.upper[1]),

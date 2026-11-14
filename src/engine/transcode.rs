@@ -82,6 +82,7 @@ impl VobuReader {
             data.extend_from_slice(s);
             self.pos += 1;
         }
+        crate::engine::live::offer(&data);
         Ok(Some((start, data)))
     }
 }

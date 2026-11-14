@@ -2,6 +2,10 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.025 · 2026-11-14 12:30
+
+- Mitlaufendes Vorschaubild: Beim Einlesen einer DVD, eines Ordners oder einer VOB-/MPEG-Datei und beim Export zeigt ein kleines Bild die Stelle, die gerade verarbeitet wird. Es aktualisiert sich etwa jede Sekunde. Eingeschaltet wird es mit dem Knopf „Bild anzeigen“ im jeweiligen Fenster; standardmäßig ist es aus, und die Wahl bleibt fürs nächste Mal gespeichert. Ausgeschaltet kostet es keine Rechenzeit.
+
 ## 1.0.024 · 2026-11-14 11:17
 
 - Dateiendung für MPEG-2: Neben .mpg und .MPG stehen jetzt auch .mpeg und .MPEG zur Wahl (Einstellungen → Export). Eine eingetippte .mpg- oder .mpeg-Endung wird passend ersetzt, statt eine zweite anzuhängen.

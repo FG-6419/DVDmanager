@@ -284,6 +284,9 @@ impl Disc {
                 }
                 let count = (end - start).min(16384) as usize;
                 reader.read(start, count, &mut buf)?;
+                if !space.menu {
+                    crate::engine::live::offer(&buf);
+                }
                 let mut st = CellStats::default();
                 let mut id = None;
                 for s in buf.chunks_exact(SECTOR) {
