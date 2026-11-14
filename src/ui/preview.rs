@@ -1224,7 +1224,9 @@ impl App {
         let can_all = self.plan.mode == discslim::engine::plan::Mode::Reauthor && !self.plan.reauthor.is_empty();
         let sel_entry = if let Selection::Entry(i) = self.sel { Some(i) } else { None };
         let avail = ui.available_size();
-        let controls_h = 124.0 + if self.prefs.timeline_open { STRIP_H } else { 0.0 };
+        // Entweder die schmale Leiste oder die zoombare Zeitleiste (an deren Stelle)
+        let strip_open = self.prefs.timeline_open;
+        let controls_h = 124.0 + if strip_open { STRIP_H - 18.0 } else { 0.0 };
         // Schnittmarken (Millisekunden) und Eintrag für die zoombare Zeitleiste
         let strip_cut = match sel {
             Selection::Entry(i) => self.plan.reauthor.get(i).map(|e| (e.cut.start_ms, e.cut.end_ms)).unwrap_or((None, None)),
@@ -1296,12 +1298,6 @@ impl App {
             );
         }
 
-        ui.add_space(8.0);
-        // Zeitleiste
-        let width = ui.available_width();
-        let (bar, resp) = ui.allocate_exact_size(Vec2::new(width, 18.0), Sense::click_and_drag());
-        let track = Rect::from_center_size(bar.center(), Vec2::new(bar.width(), 6.0));
-        ui.painter().rect_filled(track, CornerRadius::same(3), p.track);
         let prog_mode = st.program && !st.prog.is_empty();
         let (lo, hi) = st.range();
         // Bei "Alle Schnitte" gilt eine gemeinsame Zeitleiste über alle Abschnitte.
@@ -1311,126 +1307,136 @@ impl App {
         } else {
             (st.current_f() - lo, hi - lo)
         };
-        let span = g_total.max(1.0) as f32;
-        let shown = st.drag.unwrap_or((g_pos as f32 / span).clamp(0.0, 1.0));
-        // Weggeschnittene Bereiche abdunkeln, Marken zeigen
-        let (m_in, m_out) = if st.window.is_some() || prog_mode { (None, None) } else { st.cut_marks };
-        if m_in.is_some() || m_out.is_some() {
-            let a = m_in.unwrap_or(0.0).clamp(0.0, 1.0);
-            let b = m_out.unwrap_or(1.0).clamp(0.0, 1.0);
-            let x = |f: f32| track.left() + track.width() * f;
-            let keep = Rect::from_min_max(egui::pos2(x(a), track.top() - 3.0), egui::pos2(x(b), track.bottom() + 3.0));
-            ui.painter().rect_stroke(keep, CornerRadius::same(4), egui::Stroke::new(1.5, p.good), egui::StrokeKind::Outside);
-        }
-        let fill = Rect::from_min_size(track.min, Vec2::new(track.width() * shown, track.height()));
-        ui.painter().rect_filled(fill, CornerRadius::same(3), p.accent);
-        if prog_mode {
-            // Grenzen zwischen den Abschnitten; mit "An Schnitten Kapitelmarken" als
-            // Kapitelmarke (Farbe der Kapitel, etwas höher)
-            let (offs, _) = st.prog_offsets();
-            let (color, reach) = if st.chapter_cuts { (p.subs, 7.0) } else { (p.good, 5.0) };
-            for o in offs.iter().skip(1) {
-                let x = track.left() + track.width() * (*o as f32 / span).min(1.0);
-                ui.painter().line_segment(
-                    [egui::pos2(x, track.top() - reach), egui::pos2(x, track.bottom() + reach)],
-                    egui::Stroke::new(2.5, color),
-                );
-            }
+        ui.add_space(8.0);
+        if strip_open {
+            // Zoombare Zeitleiste mit Standbildern an Stelle der schmalen Leiste
+            view_strip(st, ui, &p, strip_source, strip_cut, strip_entry, &mut cut_action);
         } else {
-            // Kapitelmarken
-            for (ms, _) in st.chapters.iter().filter(|c| (c.0 as f64) > lo + 1.0 && (c.0 as f64) < hi) {
-                let x = track.left() + track.width() * ((*ms as f64 - lo) as f32 / span).min(1.0);
-                ui.painter().line_segment(
-                    [egui::pos2(x, track.top() - 4.0), egui::pos2(x, track.bottom() + 4.0)],
-                    egui::Stroke::new(2.0, p.subs),
-                );
+            let width = ui.available_width();
+            let (bar, resp) = ui.allocate_exact_size(Vec2::new(width, 18.0), Sense::click_and_drag());
+            let track = Rect::from_center_size(bar.center(), Vec2::new(bar.width(), 6.0));
+            ui.painter().rect_filled(track, CornerRadius::same(3), p.track);
+            let span = g_total.max(1.0) as f32;
+            let shown = st.drag.unwrap_or((g_pos as f32 / span).clamp(0.0, 1.0));
+            // Weggeschnittene Bereiche abdunkeln, Marken zeigen
+            let (m_in, m_out) = if st.window.is_some() || prog_mode { (None, None) } else { st.cut_marks };
+            if m_in.is_some() || m_out.is_some() {
+                let a = m_in.unwrap_or(0.0).clamp(0.0, 1.0);
+                let b = m_out.unwrap_or(1.0).clamp(0.0, 1.0);
+                let x = |f: f32| track.left() + track.width() * f;
+                let keep = Rect::from_min_max(egui::pos2(x(a), track.top() - 3.0), egui::pos2(x(b), track.bottom() + 3.0));
+                ui.painter().rect_stroke(keep, CornerRadius::same(4), egui::Stroke::new(1.5, p.good), egui::StrokeKind::Outside);
             }
-        }
-        ui.painter().circle_filled(egui::pos2(track.left() + track.width() * shown, track.center().y), 7.0, p.accent);
-        if let Some(hover) = resp.hover_pos() {
-            let f = ((hover.x - track.left()) / track.width().max(1.0)).clamp(0.0, 1.0);
+            let fill = Rect::from_min_size(track.min, Vec2::new(track.width() * shown, track.height()));
+            ui.painter().rect_filled(fill, CornerRadius::same(3), p.accent);
             if prog_mode {
+                // Grenzen zwischen den Abschnitten; mit "An Schnitten Kapitelmarken" als
+                // Kapitelmarke (Farbe der Kapitel, etwas höher)
                 let (offs, _) = st.prog_offsets();
-                let g = f64::from(f * span);
-                let k = offs.iter().rposition(|o| *o <= g).unwrap_or(0);
-                if st.chapter_cuts {
-                    resp.clone().on_hover_text(trf!("Eintrag {} · {} · beginnt ein Kapitel", "Entry {} · {} · starts a chapter", k + 1, fmt_time(g as u64)));
-                } else {
-                    resp.clone().on_hover_text(trf!("Eintrag {} · {}", "Entry {} · {}", k + 1, fmt_time(g as u64)));
+                let (color, reach) = if st.chapter_cuts { (p.subs, 7.0) } else { (p.good, 5.0) };
+                for o in offs.iter().skip(1) {
+                    let x = track.left() + track.width() * (*o as f32 / span).min(1.0);
+                    ui.painter().line_segment(
+                        [egui::pos2(x, track.top() - reach), egui::pos2(x, track.bottom() + reach)],
+                        egui::Stroke::new(2.5, color),
+                    );
                 }
             } else {
-                // Kapitel unter dem Mauszeiger nennen
-                let at = (lo + f64::from(f * span)) as u64;
-                if let Some((_, name)) = st.chapters.iter().rev().find(|(ms, _)| *ms <= at) {
-                    resp.clone().on_hover_text(format!("{name} · {}", fmt_time(at)));
+                // Kapitelmarken
+                for (ms, _) in st.chapters.iter().filter(|c| (c.0 as f64) > lo + 1.0 && (c.0 as f64) < hi) {
+                    let x = track.left() + track.width() * ((*ms as f64 - lo) as f32 / span).min(1.0);
+                    ui.painter().line_segment(
+                        [egui::pos2(x, track.top() - 4.0), egui::pos2(x, track.bottom() + 4.0)],
+                        egui::Stroke::new(2.0, p.subs),
+                    );
                 }
             }
-        }
-        if resp.is_pointer_button_down_on() {
-            if let Some(pos) = resp.interact_pointer_pos() {
-                let f = ((pos.x - track.left()) / track.width().max(1.0)).clamp(0.0, 1.0);
-                st.drag = Some(f);
-                // Beim Ziehen laufend mitspringen (am Schlüsselbild, das geht schnell).
-                // Ein neuer Sprung erst, wenn das vorige Bild da ist oder es zu lange dauert.
-                let (k, t) = if prog_mode {
+            ui.painter().circle_filled(egui::pos2(track.left() + track.width() * shown, track.center().y), 7.0, p.accent);
+            if let Some(hover) = resp.hover_pos() {
+                let f = ((hover.x - track.left()) / track.width().max(1.0)).clamp(0.0, 1.0);
+                if prog_mode {
+                    let (offs, _) = st.prog_offsets();
+                    let g = f64::from(f * span);
+                    let k = offs.iter().rposition(|o| *o <= g).unwrap_or(0);
+                    if st.chapter_cuts {
+                        resp.clone().on_hover_text(trf!("Eintrag {} · {} · beginnt ein Kapitel", "Entry {} · {} · starts a chapter", k + 1, fmt_time(g as u64)));
+                    } else {
+                        resp.clone().on_hover_text(trf!("Eintrag {} · {}", "Entry {} · {}", k + 1, fmt_time(g as u64)));
+                    }
+                } else {
+                    // Kapitel unter dem Mauszeiger nennen
+                    let at = (lo + f64::from(f * span)) as u64;
+                    if let Some((_, name)) = st.chapters.iter().rev().find(|(ms, _)| *ms <= at) {
+                        resp.clone().on_hover_text(format!("{name} · {}", fmt_time(at)));
+                    }
+                }
+            }
+            if resp.is_pointer_button_down_on() {
+                if let Some(pos) = resp.interact_pointer_pos() {
+                    let f = ((pos.x - track.left()) / track.width().max(1.0)).clamp(0.0, 1.0);
+                    st.drag = Some(f);
+                    // Beim Ziehen laufend mitspringen (am Schlüsselbild, das geht schnell).
+                    // Ein neuer Sprung erst, wenn das vorige Bild da ist oder es zu lange dauert.
+                    let (k, t) = if prog_mode {
+                        let (offs, _) = st.prog_offsets();
+                        let g = f64::from(f) * g_total;
+                        let k = offs.iter().rposition(|o| *o <= g).unwrap_or(0);
+                        (k, st.prog.get(k).map(|c| c.1 + (g - offs[k])).unwrap_or(0.0))
+                    } else {
+                        (st.prog_cur, lo + f64::from(f) * (hi - lo))
+                    };
+                    let ready = !st.want_frame || st.drag_live.is_none_or(|(_, at)| at.elapsed().as_millis() > 300);
+                    let moved = st.drag_live.is_none_or(|(last, _)| (last - t).abs() > 40.0);
+                    // Bei "Alle Schnitte" nur innerhalb des laufenden Eintrags (ein Wechsel lädt neu)
+                    if ready && moved && (!prog_mode || k == st.prog_cur) {
+                        st.seek_time(t, false);
+                        st.drag_live = Some((t, Instant::now()));
+                    }
+                    ui.ctx().request_repaint_after(Duration::from_millis(16));
+                }
+            }
+            // Rechtsklick: an dieser Stelle Schnittanfang oder -ende des passenden Eintrags setzen
+            if resp.secondary_clicked() {
+                if let Some(pos) = resp.interact_pointer_pos() {
+                    st.ctx_frac = Some(((pos.x - track.left()) / track.width().max(1.0)).clamp(0.0, 1.0));
+                }
+            }
+            let ctx_target: Option<(usize, u64)> = st.ctx_frac.and_then(|f| {
+                if prog_mode {
                     let (offs, _) = st.prog_offsets();
                     let g = f64::from(f) * g_total;
                     let k = offs.iter().rposition(|o| *o <= g).unwrap_or(0);
-                    (k, st.prog.get(k).map(|c| c.1 + (g - offs[k])).unwrap_or(0.0))
+                    st.prog.get(k).map(|c| (c.0, (c.1 + (g - offs[k])).min(c.2) as u64))
                 } else {
-                    (st.prog_cur, lo + f64::from(f) * (hi - lo))
-                };
-                let ready = !st.want_frame || st.drag_live.is_none_or(|(_, at)| at.elapsed().as_millis() > 300);
-                let moved = st.drag_live.is_none_or(|(last, _)| (last - t).abs() > 40.0);
-                // Bei "Alle Schnitte" nur innerhalb des laufenden Eintrags (ein Wechsel lädt neu)
-                if ready && moved && (!prog_mode || k == st.prog_cur) {
-                    st.seek_time(t, false);
-                    st.drag_live = Some((t, Instant::now()));
-                }
-                ui.ctx().request_repaint_after(Duration::from_millis(16));
-            }
-        }
-        // Rechtsklick: an dieser Stelle Schnittanfang oder -ende des passenden Eintrags setzen
-        if resp.secondary_clicked() {
-            if let Some(pos) = resp.interact_pointer_pos() {
-                st.ctx_frac = Some(((pos.x - track.left()) / track.width().max(1.0)).clamp(0.0, 1.0));
-            }
-        }
-        let ctx_target: Option<(usize, u64)> = st.ctx_frac.and_then(|f| {
-            if prog_mode {
-                let (offs, _) = st.prog_offsets();
-                let g = f64::from(f) * g_total;
-                let k = offs.iter().rposition(|o| *o <= g).unwrap_or(0);
-                st.prog.get(k).map(|c| (c.0, (c.1 + (g - offs[k])).min(c.2) as u64))
-            } else {
-                sel_entry.map(|i| (i, (lo + f64::from(f) * (hi - lo)) as u64))
-            }
-        });
-        if let Some((entry, at)) = ctx_target {
-            resp.context_menu(|ui| {
-                ui.label(
-                    RichText::new(trf!("Eintrag {} · {}", "Entry {} · {}", entry + 1, super::views::fmt_time_precise(at)))
-                        .size(12.5)
-                        .color(p.muted),
-                );
-                if ui.button(trf!("{}  Schnittanfang hier setzen", "{}  Set cut start here", ic::BRACKETS_SQUARE)).clicked() {
-                    cut_action = Some((entry, true, at));
-                    ui.close();
-                }
-                if ui.button(trf!("{}  Schnittende hier setzen", "{}  Set cut end here", ic::BRACKETS_SQUARE)).clicked() {
-                    cut_action = Some((entry, false, at));
-                    ui.close();
+                    sel_entry.map(|i| (i, (lo + f64::from(f) * (hi - lo)) as u64))
                 }
             });
-        }
-        if resp.drag_stopped() || resp.clicked() {
-            st.drag_live = None;
-            if let Some(f) = st.drag.take() {
-                if prog_mode {
-                    st.prog_seek_global(f64::from(f) * g_total);
-                } else {
-                    let exact = st.step_exact;
-                    st.seek_time(lo + f64::from(f) * (hi - lo), exact);
+            if let Some((entry, at)) = ctx_target {
+                resp.context_menu(|ui| {
+                    ui.label(
+                        RichText::new(trf!("Eintrag {} · {}", "Entry {} · {}", entry + 1, super::views::fmt_time_precise(at)))
+                            .size(12.5)
+                            .color(p.muted),
+                    );
+                    if ui.button(trf!("{}  Schnittanfang hier setzen", "{}  Set cut start here", ic::BRACKETS_SQUARE)).clicked() {
+                        cut_action = Some((entry, true, at));
+                        ui.close();
+                    }
+                    if ui.button(trf!("{}  Schnittende hier setzen", "{}  Set cut end here", ic::BRACKETS_SQUARE)).clicked() {
+                        cut_action = Some((entry, false, at));
+                        ui.close();
+                    }
+                });
+            }
+            if resp.drag_stopped() || resp.clicked() {
+                st.drag_live = None;
+                if let Some(f) = st.drag.take() {
+                    if prog_mode {
+                        st.prog_seek_global(f64::from(f) * g_total);
+                    } else {
+                        let exact = st.step_exact;
+                        st.seek_time(lo + f64::from(f) * (hi - lo), exact);
+                    }
                 }
             }
         }
@@ -1533,9 +1539,10 @@ impl App {
             }
 
             ui.add_space(8.0);
-            let at = match st.drag {
-                Some(f) => f64::from(f) * g_total,
-                None => g_pos,
+            let at = match (st.drag, st.strip.drag) {
+                (Some(f), _) => f64::from(f) * g_total,
+                (None, Some(t)) if !prog_mode => t - lo,
+                _ => g_pos,
             };
             let mut text = format!(
                 "{} / {}",
@@ -1568,14 +1575,13 @@ impl App {
 
         // Zweite Zeile: Zeitleiste ein/aus, Ansicht, Ton, Kompression
         ui.horizontal(|ui| {
-            let caret = if *timeline_open { ic::CARET_DOWN } else { ic::CARET_RIGHT };
             let tip = if *timeline_open {
-                tr!("Zoombare Zeitleiste mit Standbildern einklappen", "Collapse the zoomable timeline with stills")
+                tr!("Wieder die schmale Leiste zeigen", "Show the slim bar again")
             } else {
-                tr!("Zoombare Zeitleiste mit Standbildern ausklappen, zum genauen Setzen von Schnitten", "Expand the zoomable timeline with stills, for precise cuts")
+                tr!("Zoombare Zeitleiste mit Standbildern zeigen, zum genauen Setzen von Schnitten", "Show the zoomable timeline with stills, for precise cuts")
             };
             if ui
-                .selectable_label(*timeline_open, RichText::new(trf!("{} {}  Zeitleiste", "{} {}  Timeline", caret, ic::FILM_STRIP)).size(13.0))
+                .selectable_label(*timeline_open, RichText::new(trf!("{}  Zeitleiste", "{}  Timeline", ic::FILM_STRIP)).size(13.0))
                 .on_hover_text(tip)
                 .clicked()
             {
@@ -1615,11 +1621,6 @@ impl App {
                 }
             });
         });
-
-        if *timeline_open {
-            ui.add_space(6.0);
-            view_strip(st, ui, &p, strip_source, strip_cut, strip_entry, &mut cut_action);
-        }
 
         // Schnittmarke aus dem Kontextmenü der Zeitleiste übernehmen
         if let Some((entry, start, at)) = cut_action {

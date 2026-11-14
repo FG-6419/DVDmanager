@@ -2,6 +2,10 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.028 · 2026-11-14 16:56
+
+- Die zoombare Zeitleiste steht jetzt direkt unter dem Vorschaubild, an Stelle der schmalen Leiste. Der Knopf „Zeitleiste“ schaltet zwischen beiden um, es ist immer nur eine zu sehen; die Wahl bleibt gespeichert. Beim Ziehen in der Zeitleiste zeigt die Zeitangabe die Stelle unter dem Zeiger.
+
 ## 1.0.027 · 2026-11-14 16:44
 
 - Zoombare Zeitleiste mit Standbildern unter der Vorschau, zum genauen Setzen von Schnitten:

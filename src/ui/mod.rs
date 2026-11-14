@@ -1000,8 +1000,8 @@ impl App {
             }
             ("backup", 5) => self.open_backup_dialog(),
             ("about", 5) => self.about_open = true,
-            ("timeline" | "timelinezoom", 5) => {
-                self.prefs.timeline_open = true;
+            ("timeline" | "timelinezoom" | "timelineoff", 5) => {
+                self.prefs.timeline_open = state != "timelineoff";
                 self.dev_state = Some("cut".into());
                 self.apply_dev_state(ctx);
                 self.dev_state = Some(state.clone());
