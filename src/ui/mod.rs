@@ -179,6 +179,8 @@ pub struct Prefs {
     pub ext: ExtStyle,
     /// Mitlaufendes Vorschaubild beim Einlesen und beim Export (über den Knopf dort)
     pub live_preview: bool,
+    /// Zoombare Zeitleiste mit Standbildern unter der Vorschau ausgeklappt
+    pub timeline_open: bool,
 }
 
 impl Default for Prefs {
@@ -216,6 +218,7 @@ impl Default for Prefs {
             thumb_loop_secs: 5,
             ext: ExtStyle::default(),
             live_preview: false,
+            timeline_open: true,
         }
     }
 }
@@ -321,6 +324,9 @@ impl App {
             }
             if let Some(v) = st.get_string("live_preview") {
                 prefs.live_preview = v == "1";
+            }
+            if let Some(v) = st.get_string("timeline_open") {
+                prefs.timeline_open = v == "1";
             }
             if let Some(v) = st.get_string("thumb_loop_secs").and_then(|v| v.parse::<u32>().ok()) {
                 prefs.thumb_loop_secs = v.clamp(1, 60);
@@ -957,7 +963,12 @@ impl App {
         self.frames += 1;
         #[cfg(debug_assertions)]
         self.apply_dev_state(ctx);
-        if self.frames >= 120 && !self.shot_requested {
+        // Bei der Zeitleiste länger warten, bis die Standbilder da sind
+        #[cfg(debug_assertions)]
+        let wait = if self.dev_state.as_deref().is_some_and(|s| s.starts_with("timeline")) { 400 } else { 120 };
+        #[cfg(not(debug_assertions))]
+        let wait = 120;
+        if self.frames >= wait && !self.shot_requested {
             self.shot_requested = true;
             let flag = self.shot_taken.clone();
             let ctx2 = ctx.clone();
@@ -989,6 +1000,14 @@ impl App {
             }
             ("backup", 5) => self.open_backup_dialog(),
             ("about", 5) => self.about_open = true,
+            ("timeline" | "timelinezoom", 5) => {
+                self.prefs.timeline_open = true;
+                self.dev_state = Some("cut".into());
+                self.apply_dev_state(ctx);
+                self.dev_state = Some(state.clone());
+            }
+            ("timeline" | "timelinezoom", 60) => self.preview.seek_time(20_000.0, true),
+            ("timelinezoom", 80) => self.preview.dev_zoom(8.0, 18_000.0),
             ("cut" | "cutview", 5) => {
                 self.plan.mode = discslim::engine::plan::Mode::Reauthor;
                 if let Some(d) = self.disc.clone() {
@@ -1605,6 +1624,7 @@ impl eframe::App for App {
         storage.set_string("autoplay", flag(self.prefs.autoplay));
         storage.set_string("thumb_anim", flag(self.prefs.thumb_anim));
         storage.set_string("live_preview", flag(self.prefs.live_preview));
+        storage.set_string("timeline_open", flag(self.prefs.timeline_open));
         for (i, key) in ["ext_upper_vob", "ext_upper_mpg", "ext_upper_mkv"].iter().enumerate() {
             storage.set_string(key, flag(self.prefs.ext.upper[i]));
         }

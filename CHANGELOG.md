@@ -2,6 +2,16 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.027 · 2026-11-14 16:44
+
+- Zoombare Zeitleiste mit Standbildern unter der Vorschau, zum genauen Setzen von Schnitten:
+  - Oben eine Zeitskala, darunter eine Reihe kleiner Standbilder der jeweiligen Stellen. Abspielposition, Schnittmarken (grün, Weggeschnittenes abgedunkelt) und Kapitelmarken liegen darüber.
+  - Zoomen mit dem Mausrad (um die Mausposition), mit dem Schieberegler oder mit Lupe +/−, bis hin zu einzelnen Bildern. Der Knopf daneben zeigt wieder die ganze Länge.
+  - Verschieben mit Umschalt+Mausrad, mit der mittleren Maustaste oder mit dem Rollbalken darunter. Beim Abspielen folgt der Ausschnitt der Abspielposition.
+  - Klicken oder Ziehen setzt die Abspielposition, beim Loslassen bildgenau. Der Rechtsklick setzt wie auf der schmalen Leiste Schnittanfang oder -ende an dieser Stelle.
+  - Die Standbilder entstehen im Hintergrund, die nächstgelegenen zuerst, und bleiben zwischengespeichert. Ihre Abstände verdoppeln bzw. halbieren sich beim Zoomen, damit schon fertige Bilder wiederverwendet werden.
+  - Ein- und ausklappen mit dem Knopf „Zeitleiste“ unter der Vorschau; die Wahl bleibt gespeichert. Die bisherige schmale Leiste bleibt unverändert als Übersicht erhalten.
+
 ## 1.0.026 · 2026-11-14 12:51
 
 - Schnelleres Einlesen einer DVD:

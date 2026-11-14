@@ -6,6 +6,7 @@ use eframe::egui::{self, Align2, Color32, CornerRadius, FontId, Rect, RichText, 
 use egui_phosphor::regular as ic;
 
 use discslim::dvd::model::{fmt_time, Disc};
+use discslim::dvd::source::Source;
 use discslim::engine::plan::{CellDecision, ItemId};
 use discslim::engine::audio::{AudioBus, Codec, TrackChoice};
 use discslim::engine::preview::{self, menu_segments, title_segments, PreviewFrame, PreviewHandle, Segment};
@@ -77,7 +78,34 @@ pub struct PreviewState {
     dev_hold: bool,
     /// Übergang anhören: anhalten, sobald Abschnitt k die Zeit t erreicht (spätestens bis dann)
     pub listen_until: Option<(usize, f64, Instant)>,
+    /// Zoombare Zeitleiste mit Standbildern
+    pub strip: Strip,
 }
+
+/// Zustand der zoombaren Zeitleiste.
+#[derive(Default)]
+pub struct Strip {
+    thumbs: Option<super::thumbs::StripThumbs>,
+    /// Quelle der Standbilder (Titel und Kapitelbereich bzw. Menü)
+    pub tag: u64,
+    /// Linker Rand des sichtbaren Ausschnitts (Titelzeit) und Millisekunden je Bildpunkt
+    view_lo: f64,
+    ms_per_px: f64,
+    /// Bereich, für den der Ausschnitt gilt; ändert er sich, wird wieder alles gezeigt
+    range: (f64, f64),
+    /// Beim Ziehen im Streifen: angezeigte Zeit
+    drag: Option<f64>,
+    drag_live: Option<(f64, Instant)>,
+    /// Ziehen am Rollbalken: Abstand des Griffs zum Zeiger (Millisekunden)
+    pan_grab: Option<f64>,
+    /// Zeit des letzten Rechtsklicks im Streifen
+    ctx_ms: Option<f64>,
+    /// Abspielposition beim letzten Durchlauf (zum Nachführen des Ausschnitts)
+    last_pos: f64,
+}
+
+/// Höhe der ausgeklappten Zeitleiste samt Werkzeugzeile.
+pub const STRIP_H: f32 = 156.0;
 
 /// Wie lange vor und nach einer Schnittstelle beim Anhören gespielt wird.
 pub const LISTEN_MS: f64 = 2_500.0;
@@ -130,6 +158,14 @@ impl PreviewState {
             self.playing,
             self.listen_until.map(|l| (l.0, l.1))
         )
+    }
+
+    /// Nur für Prüfbilder: Zeitleiste auf eine Zoomstufe stellen.
+    #[cfg(debug_assertions)]
+    pub fn dev_zoom(&mut self, ms_per_px: f64, view_lo: f64) {
+        self.strip.ms_per_px = ms_per_px;
+        self.strip.view_lo = view_lo;
+        self.strip.last_pos = self.current_f();
     }
 
     #[cfg(debug_assertions)]
@@ -439,6 +475,365 @@ fn chapter_list(disc: &Disc, title: usize, first: usize, last: usize) -> Vec<(u6
         .map(|(i, c)| (c.start_ms.saturating_sub(base), trf!("Kapitel {}", "Chapter {}", i + 1)))
         .collect()
 }
+fn strip_tag(kind: u64, title: usize, first: usize, last: usize) -> u64 {
+    (kind << 60) ^ ((title as u64) << 40) ^ ((first as u64) << 20) ^ last as u64
+}
+
+/// Abstand der Skalenstriche: kleinster Schritt, der mindestens `min_ms` lang ist.
+fn ruler_step(min_ms: f64) -> f64 {
+    const STEPS: [f64; 19] = [
+        40.0, 100.0, 200.0, 500.0, 1_000.0, 2_000.0, 5_000.0, 10_000.0, 15_000.0, 30_000.0, 60_000.0, 120_000.0, 300_000.0,
+        600_000.0, 900_000.0, 1_800_000.0, 3_600_000.0, 7_200_000.0, 14_400_000.0,
+    ];
+    STEPS.iter().copied().find(|s| *s >= min_ms).unwrap_or(14_400_000.0)
+}
+
+/// Zeit für die Skala: Stunden nur, wenn nötig; Zehntel nur bei feinen Schritten.
+fn ruler_label(ms: f64, step: f64) -> String {
+    let ms = ms.max(0.0).round() as u64;
+    let (h, m, s) = (ms / 3_600_000, ms / 60_000 % 60, ms / 1000 % 60);
+    let base = if h > 0 { format!("{h}:{m:02}:{s:02}") } else { format!("{m:02}:{s:02}") };
+    if step < 1000.0 {
+        format!("{base}.{:02}", ms % 1000 / 10)
+    } else {
+        base
+    }
+}
+
+/// Abstand der Standbilder: Bilddauer mal Zweierpotenz, damit sich die Zeiten beim Zoomen
+/// wiederholen und schon fertige Bilder weiterverwendet werden.
+fn tile_step(min_ms: f64, frame_ms: f64) -> f64 {
+    let mut step = frame_ms.max(1.0);
+    while step < min_ms {
+        step *= 2.0;
+    }
+    step
+}
+
+/// Zoombare Zeitleiste: Werkzeugzeile, Zeitskala, Standbilder und Rollbalken.
+/// `cut`: Schnittmarken des gezeigten Eintrags, `entry`: Eintrag für das Kontextmenü.
+#[allow(clippy::too_many_arguments)]
+fn view_strip(
+    st: &mut PreviewState,
+    ui: &mut egui::Ui,
+    p: &super::style::Pal,
+    source: Option<&Source>,
+    cut: (Option<u64>, Option<u64>),
+    entry: Option<usize>,
+    cut_action: &mut Option<(usize, bool, u64)>,
+) {
+    let ctx = ui.ctx().clone();
+    if st.strip.thumbs.is_none() {
+        st.strip.thumbs = Some(super::thumbs::StripThumbs::new(ctx.clone()));
+    }
+    if let Some(t) = st.strip.thumbs.as_mut() {
+        t.pump(&ctx);
+    }
+    let (lo, hi) = st.range();
+    let fl = st.frame_len();
+    let pos = st.current_f();
+    let active = st.playing || st.scrub != 0;
+    let enabled = !st.segments.is_empty() && st.total_ms > 0;
+    let aspect = if st.aspect > 0.1 { st.aspect } else { 16.0 / 9.0 };
+    let width = ui.available_width().max(60.0);
+    let full = ((hi - lo) / f64::from(width)).max(0.01);
+    // Feinste Stufe: ein Bild etwa 30 Bildpunkte breit
+    let finest = (fl / 30.0).min(full);
+
+    let s = &mut st.strip;
+    if s.range != (lo, hi) || s.ms_per_px <= 0.0 {
+        s.range = (lo, hi);
+        s.ms_per_px = full;
+        s.view_lo = lo;
+    }
+    s.ms_per_px = s.ms_per_px.clamp(finest, full);
+
+    // Werkzeugzeile
+    let mut zoom_to: Option<f64> = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        if super::style::icon_button(ui, p, ic::MAGNIFYING_GLASS_MINUS, tr!("Verkleinern (Mausrad über der Zeitleiste)", "Zoom out (mouse wheel over the timeline)")).clicked() {
+            zoom_to = Some(s.ms_per_px * 2.0);
+        }
+        let can = enabled && full > finest * 1.01;
+        let mut z = if can { ((s.ms_per_px / full).ln() / (finest / full).ln()).clamp(0.0, 1.0) } else { 0.0 };
+        ui.spacing_mut().slider_width = 150.0;
+        let r = ui.add_enabled(can, egui::Slider::new(&mut z, 0.0..=1.0).show_value(false));
+        if r.changed() {
+            zoom_to = Some(full * (finest / full).powf(z));
+        }
+        if super::style::icon_button(ui, p, ic::MAGNIFYING_GLASS_PLUS, tr!("Vergrößern, bis hin zu einzelnen Bildern", "Zoom in, down to single frames")).clicked() {
+            zoom_to = Some(s.ms_per_px / 2.0);
+        }
+        if super::style::icon_button(ui, p, ic::ARROWS_OUT_LINE_HORIZONTAL, tr!("Ganze Länge zeigen", "Show whole length")).clicked() {
+            zoom_to = Some(full);
+        }
+        ui.add_space(8.0);
+        let span = s.ms_per_px * f64::from(width);
+        ui.label(
+            RichText::new(trf!("Ausschnitt {}", "Showing {}", super::views::fmt_time_precise(span.min(hi - lo) as u64)))
+                .size(12.0)
+                .color(p.faint),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(
+                RichText::new(tr!("Mausrad: Zoom · Umschalt+Rad oder mittlere Taste: verschieben", "Wheel: zoom · Shift+wheel or middle button: pan"))
+                    .size(11.5)
+                    .color(p.faint),
+            );
+        });
+    });
+
+    let ruler_h = 18.0f32;
+    let thumb_h = 58.0f32;
+    let (area, resp) = ui.allocate_exact_size(Vec2::new(width, ruler_h + thumb_h + 4.0), Sense::click_and_drag());
+    let span_of = |mpp: f64| mpp * f64::from(area.width());
+
+    // Zoomen um einen Ankerpunkt (Zeit bleibt an derselben Stelle)
+    let zoom_at = |s: &mut Strip, mpp: f64, anchor: f64| {
+        let mpp = mpp.clamp(finest, full);
+        let off = (anchor - s.view_lo) / s.ms_per_px;
+        s.view_lo = anchor - off * mpp;
+        s.ms_per_px = mpp;
+    };
+    if let Some(mpp) = zoom_to {
+        // Um die Abspielposition, wenn sie zu sehen ist, sonst um die Mitte
+        let span = span_of(s.ms_per_px);
+        let anchor = if pos >= s.view_lo && pos <= s.view_lo + span { pos } else { s.view_lo + span / 2.0 };
+        zoom_at(s, mpp, anchor);
+    }
+    if resp.hovered() && enabled {
+        let (scroll, zd, shift, command) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers.shift, i.modifiers.command));
+        let mouse_t = resp.hover_pos().map(|h| s.view_lo + f64::from(h.x - area.left()) * s.ms_per_px).unwrap_or(pos);
+        if (zd - 1.0).abs() > 1e-3 {
+            zoom_at(s, s.ms_per_px / f64::from(zd), mouse_t);
+        } else if !command {
+            if shift || scroll.x.abs() > scroll.y.abs() {
+                let d = if scroll.x.abs() > 0.0 { scroll.x } else { scroll.y };
+                s.view_lo -= f64::from(d) * s.ms_per_px;
+            } else if scroll.y.abs() > 0.0 {
+                let f = (-f64::from(scroll.y) * 0.003).exp();
+                zoom_at(s, s.ms_per_px * f, mouse_t);
+            }
+        }
+    }
+    if resp.dragged_by(egui::PointerButton::Middle) {
+        s.view_lo -= f64::from(resp.drag_delta().x) * s.ms_per_px;
+    }
+    // Ausschnitt folgt der Abspielposition, wenn sie ihn verlässt
+    let span = span_of(s.ms_per_px);
+    if s.drag.is_none() && s.pan_grab.is_none() && (pos - s.last_pos).abs() > 0.5 && (pos < s.view_lo || pos > s.view_lo + span) {
+        s.view_lo = if active { pos - span * 0.05 } else { pos - span / 2.0 };
+    }
+    s.last_pos = pos;
+    s.view_lo = s.view_lo.clamp(lo, (hi - span).max(lo));
+    let view_lo = s.view_lo;
+    let mpp = s.ms_per_px;
+    let x_of = |t: f64| area.left() + ((t - view_lo) / mpp) as f32;
+    let t_of = |x: f32| view_lo + f64::from(x - area.left()) * mpp;
+
+    let painter = ui.painter_at(area);
+    painter.rect_filled(area, CornerRadius::same(6), p.screen);
+    let ruler = Rect::from_min_size(area.min, Vec2::new(area.width(), ruler_h));
+    let thumbs_r = Rect::from_min_max(egui::pos2(area.left(), ruler.bottom() + 2.0), egui::pos2(area.right(), area.bottom() - 2.0));
+
+    // Standbilder: Abstand als Zweierpotenz der Bilddauer, damit sie beim Zoomen wiederkehren
+    if enabled {
+        let tile_w = thumbs_r.height() * aspect;
+        let step = tile_step(f64::from(tile_w) * mpp, fl);
+        let exact = step < 1_500.0;
+        let first = ((view_lo / step).floor() as i64).max(0);
+        let last = ((view_lo + span) / step).ceil() as i64;
+        let tag = s.tag;
+        let mut keys = Vec::new();
+        for k in first..=last {
+            let t = k as f64 * step;
+            if t >= hi {
+                break;
+            }
+            let key: super::thumbs::StripKey = (tag, t.round() as u64, exact);
+            let r = Rect::from_min_size(egui::pos2(x_of(t), thumbs_r.top()), Vec2::new(tile_w, thumbs_r.height()));
+            match s.thumbs.as_ref().and_then(|th| th.get(&key)) {
+                Some(tex) => {
+                    painter.image(tex.id(), r, Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+                }
+                None => {
+                    painter.rect_filled(r.shrink(1.0), CornerRadius::same(2), p.track);
+                    keys.push(key);
+                }
+            }
+        }
+        // Zuerst die Bilder nahe der Abspielposition (bzw. der Mitte)
+        let focus = if pos >= view_lo && pos <= view_lo + span { pos } else { view_lo + span / 2.0 };
+        keys.sort_by(|a, b| {
+            let da = (a.1 as f64 - focus).abs();
+            let db = (b.1 as f64 - focus).abs();
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        if let (Some(th), Some(src)) = (s.thumbs.as_mut(), source) {
+            th.request(tag, src, &st.segments, keys);
+        }
+    }
+
+    // Zeitskala mit beschrifteten Hauptstrichen und kurzen Zwischenstrichen
+    painter.rect_filled(ruler, CornerRadius::ZERO, p.card);
+    let step = ruler_step(f64::from(84.0f32) * mpp);
+    let minor = step / 5.0;
+    let first = (view_lo / minor).floor() as i64;
+    let last = ((view_lo + span) / minor).ceil() as i64;
+    for k in first..=last {
+        let t = k as f64 * minor;
+        let x = x_of(t);
+        if k % 5 == 0 {
+            painter.line_segment([egui::pos2(x, ruler.top()), egui::pos2(x, ruler.bottom())], egui::Stroke::new(1.0, p.muted));
+            painter.text(egui::pos2(x + 3.0, ruler.center().y), Align2::LEFT_CENTER, ruler_label(t, step), FontId::proportional(11.0), p.muted);
+        } else {
+            painter.line_segment([egui::pos2(x, ruler.bottom() - 4.0), egui::pos2(x, ruler.bottom())], egui::Stroke::new(1.0, p.faint));
+        }
+    }
+
+    // Weggeschnittenes abdunkeln, Schnitt- und Kapitelmarken
+    if st.window.is_none() && (cut.0.is_some() || cut.1.is_some()) {
+        let a = cut.0.map(|v| v as f64).unwrap_or(lo);
+        let b = cut.1.map(|v| (v as f64).min(hi)).unwrap_or(hi);
+        let shade = Color32::from_black_alpha(150);
+        if a > view_lo {
+            painter.rect_filled(Rect::from_min_max(egui::pos2(area.left(), thumbs_r.top()), egui::pos2(x_of(a), thumbs_r.bottom())), CornerRadius::ZERO, shade);
+        }
+        if b < view_lo + span {
+            painter.rect_filled(Rect::from_min_max(egui::pos2(x_of(b), thumbs_r.top()), egui::pos2(area.right(), thumbs_r.bottom())), CornerRadius::ZERO, shade);
+        }
+    }
+    for (ms, _) in &st.chapters {
+        let t = *ms as f64;
+        if t > view_lo && t < view_lo + span {
+            let x = x_of(t);
+            painter.line_segment([egui::pos2(x, ruler.top()), egui::pos2(x, area.bottom())], egui::Stroke::new(1.5, p.subs));
+        }
+    }
+    for (t, open) in [(cut.0, true), (cut.1, false)] {
+        let Some(t) = t.map(|v| v as f64) else { continue };
+        if t >= view_lo && t <= view_lo + span {
+            let x = x_of(t);
+            painter.line_segment([egui::pos2(x, ruler.top()), egui::pos2(x, area.bottom())], egui::Stroke::new(2.0, p.good));
+            // Klammer zeigt zur behaltenen Seite
+            let dir = if open { 6.0 } else { -6.0 };
+            for y in [thumbs_r.top() + 1.0, thumbs_r.bottom() - 1.0] {
+                painter.line_segment([egui::pos2(x, y), egui::pos2(x + dir, y)], egui::Stroke::new(2.0, p.good));
+            }
+        }
+    }
+
+    // Abspielposition
+    let shown = s.drag.unwrap_or(pos);
+    if enabled && shown >= view_lo && shown <= view_lo + span {
+        let x = x_of(shown);
+        painter.line_segment([egui::pos2(x, ruler.top()), egui::pos2(x, area.bottom())], egui::Stroke::new(1.5, Color32::WHITE));
+        painter.add(egui::Shape::convex_polygon(
+            vec![egui::pos2(x - 6.0, ruler.top()), egui::pos2(x + 6.0, ruler.top()), egui::pos2(x, ruler.top() + 8.0)],
+            Color32::WHITE,
+            egui::Stroke::NONE,
+        ));
+    }
+    let mut hover_t = None;
+    if let Some(h) = resp.hover_pos().filter(|_| enabled) {
+        let t = t_of(h.x).clamp(lo, hi);
+        hover_t = Some(t);
+        painter.line_segment([egui::pos2(h.x, ruler.top()), egui::pos2(h.x, area.bottom())], egui::Stroke::new(1.0, p.faint));
+    }
+    if !enabled {
+        painter.text(area.center(), Align2::CENTER_CENTER, tr!("Keine Vorschau für diese Auswahl", "No preview for this selection"), FontId::proportional(12.0), p.faint);
+    }
+
+    // Klicken und Ziehen: Abspielposition setzen (beim Loslassen bildgenau)
+    let mut live_seek = None;
+    let mut final_seek = None;
+    if enabled && resp.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_down()) {
+        if let Some(pp) = resp.interact_pointer_pos() {
+            let t = t_of(pp.x).clamp(lo, (hi - fl).max(lo));
+            s.drag = Some(t);
+            live_seek = Some(t);
+            ctx.request_repaint_after(Duration::from_millis(16));
+        }
+    }
+    if resp.drag_stopped() || resp.clicked() {
+        s.drag_live = None;
+        final_seek = s.drag.take();
+    }
+    if resp.secondary_clicked() {
+        s.ctx_ms = resp.interact_pointer_pos().map(|pp| t_of(pp.x).clamp(lo, hi));
+    }
+    if let (Some(e), Some(at)) = (entry, s.ctx_ms) {
+        resp.context_menu(|ui| {
+            ui.label(RichText::new(trf!("Eintrag {} · {}", "Entry {} · {}", e + 1, super::views::fmt_time_precise(at as u64))).size(12.5).color(p.muted));
+            if ui.button(trf!("{}  Schnittanfang hier setzen", "{}  Set cut start here", ic::BRACKETS_SQUARE)).clicked() {
+                *cut_action = Some((e, true, at as u64));
+                ui.close();
+            }
+            if ui.button(trf!("{}  Schnittende hier setzen", "{}  Set cut end here", ic::BRACKETS_SQUARE)).clicked() {
+                *cut_action = Some((e, false, at as u64));
+                ui.close();
+            }
+        });
+    }
+    if let Some(t) = hover_t.filter(|_| s.drag.is_none()) {
+        let name = st_chapter_name(&st.chapters, t);
+        let text = match name {
+            Some(n) => format!("{n} · {}", super::views::fmt_time_precise(t as u64)),
+            None => super::views::fmt_time_precise(t as u64),
+        };
+        resp.clone().on_hover_text_at_pointer(text);
+    }
+
+    // Rollbalken: zeigt und verschiebt den sichtbaren Ausschnitt
+    ui.add_space(3.0);
+    let (bar, bresp) = ui.allocate_exact_size(Vec2::new(width, 10.0), Sense::click_and_drag());
+    let len = (hi - lo).max(1.0);
+    let bx = |t: f64| bar.left() + ((t - lo) / len) as f32 * bar.width();
+    let s = &mut st.strip;
+    let mut handle = Rect::from_min_max(egui::pos2(bx(s.view_lo), bar.top()), egui::pos2(bx(s.view_lo + span), bar.bottom()));
+    if handle.width() < 16.0 {
+        handle = Rect::from_center_size(handle.center(), Vec2::new(16.0, bar.height()));
+    }
+    ui.painter().rect_filled(bar, CornerRadius::same(5), p.track);
+    if span < len - 1.0 {
+        let c = if bresp.hovered() || s.pan_grab.is_some() { p.muted } else { p.faint };
+        ui.painter().rect_filled(handle, CornerRadius::same(5), c);
+    }
+    if bresp.is_pointer_button_down_on() {
+        if let Some(pp) = bresp.interact_pointer_pos() {
+            let t = lo + f64::from((pp.x - bar.left()) / bar.width().max(1.0)) * len;
+            let grab = *s.pan_grab.get_or_insert_with(|| if handle.contains(pp) { t - s.view_lo } else { span / 2.0 });
+            s.view_lo = (t - grab).clamp(lo, (hi - span).max(lo));
+        }
+    } else {
+        s.pan_grab = None;
+    }
+
+    // Sprünge erst jetzt, da sie die ganze Vorschau brauchen
+    if let Some(t) = live_seek {
+        let ready = !st.want_frame || st.strip.drag_live.is_none_or(|(_, at)| at.elapsed().as_millis() > 300);
+        let moved = st.strip.drag_live.is_none_or(|(last, _)| (last - t).abs() > 20.0);
+        if ready && moved {
+            // Fein gezoomt gleich bildgenau, sonst schnell am Schlüsselbild
+            let exact = st.step_exact && mpp * 30.0 < 2_000.0;
+            st.seek_time(t, exact);
+            st.strip.drag_live = Some((t, Instant::now()));
+        }
+    }
+    if let Some(t) = final_seek {
+        let exact = st.step_exact;
+        st.seek_time(t, exact);
+    }
+}
+
+fn st_chapter_name(chapters: &[(u64, String)], t: f64) -> Option<String> {
+    if chapters.len() < 2 {
+        return None;
+    }
+    chapters.iter().rev().find(|(ms, _)| (*ms as f64) <= t).map(|c| c.1.clone())
+}
+
 impl App {
     /// Aktuell gewählte Kompression, passend zur gewählten Liste.
     fn preview_opts(&self) -> Option<VideoOpts> {
@@ -605,6 +1000,16 @@ impl App {
         self.preview.chapters = chapters;
         let audio = self.preview.audio.clone().and_then(|bus| self.preview_track(&disc).map(|t| (bus, t)));
         let seek_id = self.preview.seek_id;
+        // Standbilder der Zeitleiste gehören zu Titel und Kapitelbereich (gleich für Titel und Eintrag)
+        self.preview.strip.tag = match want {
+            Selection::Item(ItemId::Title(i)) | Selection::Source(i) => {
+                let last = disc.titles.get(i).map(|t| t.chapters.len().saturating_sub(1)).unwrap_or(0);
+                strip_tag(0, i, 0, last)
+            }
+            Selection::Item(ItemId::Menu(v)) => strip_tag(1, usize::from(v), 0, 0),
+            Selection::Entry(i) => self.plan.reauthor.get(i).map(|e| strip_tag(0, e.title, e.first_chapter, e.last_chapter)).unwrap_or(0),
+            _ => 0,
+        };
         self.preview.handle = Some(preview::spawn(disc.source.clone(), segments.clone(), 0.0, opts, seek_id, audio));
         self.preview.segments = segments;
         self.preview.want_frame = true;
@@ -819,7 +1224,14 @@ impl App {
         let can_all = self.plan.mode == discslim::engine::plan::Mode::Reauthor && !self.plan.reauthor.is_empty();
         let sel_entry = if let Selection::Entry(i) = self.sel { Some(i) } else { None };
         let avail = ui.available_size();
-        let controls_h = 124.0;
+        let controls_h = 124.0 + if self.prefs.timeline_open { STRIP_H } else { 0.0 };
+        // Schnittmarken (Millisekunden) und Eintrag für die zoombare Zeitleiste
+        let strip_cut = match sel {
+            Selection::Entry(i) => self.plan.reauthor.get(i).map(|e| (e.cut.start_ms, e.cut.end_ms)).unwrap_or((None, None)),
+            _ => (None, None),
+        };
+        let strip_entry = if let Selection::Entry(i) = sel { Some(i) } else { None };
+        let strip_source = self.disc.as_ref().map(|d| &d.source);
         let screen_h = (avail.y - controls_h).max(120.0);
         let (screen, _) = ui.allocate_exact_size(Vec2::new(avail.x, screen_h), Sense::hover());
         ui.painter().rect_filled(screen, CornerRadius::same(10), p.screen);
@@ -1024,6 +1436,7 @@ impl App {
         }
 
         let jump_secs = &mut self.prefs.jump_secs;
+        let timeline_open = &mut self.prefs.timeline_open;
         // Erste Zeile: Navigation, Sprünge, Zeit, Kapitel
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
@@ -1153,8 +1566,21 @@ impl App {
             }
         });
 
-        // Zweite Zeile: Ansicht, Ton, Kompression
+        // Zweite Zeile: Zeitleiste ein/aus, Ansicht, Ton, Kompression
         ui.horizontal(|ui| {
+            let caret = if *timeline_open { ic::CARET_DOWN } else { ic::CARET_RIGHT };
+            let tip = if *timeline_open {
+                tr!("Zoombare Zeitleiste mit Standbildern einklappen", "Collapse the zoomable timeline with stills")
+            } else {
+                tr!("Zoombare Zeitleiste mit Standbildern ausklappen, zum genauen Setzen von Schnitten", "Expand the zoomable timeline with stills, for precise cuts")
+            };
+            if ui
+                .selectable_label(*timeline_open, RichText::new(trf!("{} {}  Zeitleiste", "{} {}  Timeline", caret, ic::FILM_STRIP)).size(13.0))
+                .on_hover_text(tip)
+                .clicked()
+            {
+                *timeline_open = !*timeline_open;
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 super::style::check(ui, &p, &mut st.compressed, tr!("Mit gewählter Kompression", "With chosen compression"));
                 if can_all || st.cut_len.is_some() {
@@ -1189,6 +1615,11 @@ impl App {
                 }
             });
         });
+
+        if *timeline_open {
+            ui.add_space(6.0);
+            view_strip(st, ui, &p, strip_source, strip_cut, strip_entry, &mut cut_action);
+        }
 
         // Schnittmarke aus dem Kontextmenü der Zeitleiste übernehmen
         if let Some((entry, start, at)) = cut_action {

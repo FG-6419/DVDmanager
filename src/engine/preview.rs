@@ -230,6 +230,46 @@ fn decode_vobus(source: &Source, segments: &[Segment], seg_base: &[f64], list: &
     out
 }
 
+/// Ein einzelnes Standbild zur Zeit `ms` (ab Beginn der Abschnittsliste), ohne Wiedergabe-Thread.
+/// `exact`: genau das Bild dort, sonst das Schlüsselbild davor (schneller, liest nur eine VOBU).
+pub fn still(source: &Source, segments: &[Segment], ms: f64, exact: bool) -> Option<PreviewFrame> {
+    if segments.is_empty() {
+        return None;
+    }
+    let seg_base: Vec<f64> = segments
+        .iter()
+        .scan(0.0f64, |acc, s| {
+            let b = *acc;
+            *acc += s.ms as f64;
+            Some(b)
+        })
+        .collect();
+    let (i, k) = find_vobu(source, segments, &seg_base, ms)?;
+    let mut list = Vec::with_capacity(2);
+    if exact {
+        if let Some(prev) = previous_vobu(segments, i, k) {
+            list.push(prev);
+        }
+    }
+    list.push((i, segments[i].vobus[k]));
+    let mine = list.len() - 1;
+    let mut frames: Vec<PreviewFrame> = decode_vobus(source, segments, &seg_base, &list, 0)
+        .into_iter()
+        .filter(|(_, idx)| *idx == mine)
+        .map(|(f, _)| f)
+        .collect();
+    frames.sort_by(|a, b| a.time_ms.partial_cmp(&b.time_ms).unwrap_or(std::cmp::Ordering::Equal));
+    if exact {
+        let pos = frames.iter().position(|f| f.time_ms + f.frame_ms / 2.0 >= ms);
+        match pos {
+            Some(p) => Some(frames.swap_remove(p)),
+            None => frames.pop(),
+        }
+    } else {
+        frames.into_iter().next()
+    }
+}
+
 enum RevEnd {
     Quit,
     Cmd(PreviewCmd),

@@ -170,6 +170,108 @@ impl Thumbs {
     }
 }
 
+/// Bild im Filmstreifen der Zeitleiste: Quelle (Titel/Kapitelbereich), Zeit, bildgenau.
+pub type StripKey = (u64, u64, bool);
+
+#[derive(Default)]
+struct StripShared {
+    /// Quelle, für die gerade Bilder gebraucht werden
+    src: Option<(u64, Source, Vec<Segment>)>,
+    /// Noch fehlende Bilder, wichtigste zuerst
+    want: Vec<StripKey>,
+    /// Bild, an dem der Hintergrund-Thread gerade arbeitet
+    busy: Option<StripKey>,
+}
+
+/// Standbilder für den Filmstreifen der Zeitleiste. Ein Hintergrund-Thread arbeitet die
+/// gerade sichtbaren, noch fehlenden Bilder ab; fertige bleiben im Zwischenspeicher.
+pub struct StripThumbs {
+    shared: std::sync::Arc<(std::sync::Mutex<StripShared>, std::sync::Condvar)>,
+    rx: Receiver<(StripKey, ColorImage)>,
+    cache: HashMap<StripKey, TextureHandle>,
+    order: std::collections::VecDeque<StripKey>,
+}
+
+/// So viele Bilder bleiben höchstens im Zwischenspeicher (je etwa 40 KB).
+const STRIP_CACHE: usize = 900;
+
+impl StripThumbs {
+    pub fn new(ctx: egui::Context) -> Self {
+        let shared = std::sync::Arc::new((std::sync::Mutex::new(StripShared::default()), std::sync::Condvar::new()));
+        let (tx, rx) = channel();
+        let sh = shared.clone();
+        std::thread::spawn(move || loop {
+            let (key, source, segments) = {
+                let (lock, cv) = &*sh;
+                let Ok(mut g) = lock.lock() else { return };
+                loop {
+                    let ready = g.src.as_ref().is_some_and(|s| g.want.first().is_some_and(|k| k.0 == s.0));
+                    if ready {
+                        break;
+                    }
+                    g.want.clear();
+                    g = match cv.wait(g) {
+                        Ok(g) => g,
+                        Err(_) => return,
+                    };
+                }
+                let key = g.want.remove(0);
+                g.busy = Some(key);
+                let (_, src, segs) = g.src.clone().expect("Quelle geprüft");
+                (key, src, segs)
+            };
+            let img = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| preview::still(&source, &segments, key.1 as f64, key.2)))
+                .ok()
+                .flatten()
+                .map(|f| shrink(&f.rgba, f.width, f.height, f.aspect))
+                // Kein Bild an dieser Stelle: schwarze Kachel, damit nicht immer wieder angefragt wird
+                .unwrap_or_else(|| ColorImage::from_rgba_unmultiplied([4, 3], &[16, 16, 16, 255].repeat(12)));
+            if let Ok(mut g) = sh.0.lock() {
+                g.busy = None;
+            }
+            if tx.send((key, img)).is_err() {
+                return;
+            }
+            ctx.request_repaint();
+        });
+        Self { shared, rx, cache: HashMap::new(), order: std::collections::VecDeque::new() }
+    }
+
+    /// Fertige Bilder übernehmen; einmal je Frame aufrufen.
+    pub fn pump(&mut self, ctx: &egui::Context) {
+        while let Ok((key, img)) = self.rx.try_recv() {
+            let tex = ctx.load_texture(format!("streifen-{key:?}"), img, TextureOptions::LINEAR);
+            if self.cache.insert(key, tex).is_none() {
+                self.order.push_back(key);
+            }
+            while self.order.len() > STRIP_CACHE {
+                if let Some(old) = self.order.pop_front() {
+                    self.cache.remove(&old);
+                }
+            }
+        }
+    }
+
+    pub fn get(&self, key: &StripKey) -> Option<&TextureHandle> {
+        self.cache.get(key)
+    }
+
+    /// Legt fest, welche Bilder gebraucht werden (wichtigste zuerst); ersetzt die vorige Liste.
+    pub fn request(&mut self, tag: u64, source: &Source, segments: &[Segment], keys: Vec<StripKey>) {
+        let (lock, cv) = &*self.shared;
+        let Ok(mut g) = lock.lock() else { return };
+        if g.src.as_ref().map(|s| s.0) != Some(tag) {
+            g.src = Some((tag, source.clone(), segments.to_vec()));
+        }
+        let busy = g.busy;
+        let want: Vec<StripKey> = keys.into_iter().filter(|k| !self.cache.contains_key(k) && Some(*k) != busy).collect();
+        if want != g.want {
+            g.want = want;
+            cv.notify_one();
+        }
+    }
+}
+
 /// Endlosschleife über wenige Sekunden in einem Vorschaubild.
 pub struct HoverLoop {
     /// Eintrag und Seite (0 = Anfang, 1 = Ende)

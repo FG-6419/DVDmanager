@@ -109,6 +109,29 @@ fn live_picture() {
 }
 
 #[test]
+fn timeline_stills() {
+    use discslim::engine::preview::{still, title_segments};
+    let w = work("zeitleiste");
+    let src = demo::build_sample(&w, |_| {}).unwrap();
+    let disc = open_analysed(&src);
+    let ti = longest_title(&disc);
+    let t = &disc.titles[ti];
+    let segs = title_segments(&disc, ti, 0, t.chapters.len() - 1);
+    let mid = t.ms as f64 / 2.0;
+    // Schlüsselbild: liegt an oder vor der Zielzeit, höchstens eine Bildgruppe davor
+    let key = still(&disc.source, &segs, mid, false).expect("kein Schlüsselbild");
+    assert!(key.width > 0 && key.height > 0);
+    assert!(key.time_ms <= mid + 1.0 && key.time_ms > mid - 1_500.0, "Schlüsselbild bei {} statt um {mid}", key.time_ms);
+    // Bildgenau: genau das Bild an der Zielzeit
+    let exact = still(&disc.source, &segs, mid, true).expect("kein bildgenaues Bild");
+    assert!((exact.time_ms - mid).abs() <= exact.frame_ms, "Bild bei {} statt {mid}", exact.time_ms);
+    // Anfang und Ende des Titels liefern ebenfalls ein Bild
+    assert!(still(&disc.source, &segs, 0.0, true).is_some());
+    assert!(still(&disc.source, &segs, t.ms as f64 - 100.0, false).is_some());
+    let _ = std::fs::remove_dir_all(&w);
+}
+
+#[test]
 fn custom_chapter_marks() {
     let w = work("kapitel");
     let src = demo::build_sample(&w, |_| {}).unwrap();
