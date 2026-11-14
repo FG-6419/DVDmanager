@@ -1005,6 +1005,21 @@ impl App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
             ("backup", 5) => self.open_backup_dialog(),
+            ("backupfile" | "backupsep", 5) => {
+                // Export als Datei mit allen Titeln in der Liste; wahlweise als Einzeldateien
+                self.plan.mode = Mode::Reauthor;
+                if let Some(d) = self.disc.clone() {
+                    for (i, t) in d.titles.iter().enumerate() {
+                        let e = discslim::engine::plan::ReauthorEntry::new(i, 0, t.chapters.len().saturating_sub(1), Default::default());
+                        self.plan.reauthor.push(e);
+                    }
+                }
+                self.prefs.backup_kind = OutputKind::Mkv;
+                self.open_backup_dialog();
+                if let Some(dlg) = self.backup_dlg.as_mut() {
+                    dlg.separate = state == "backupsep";
+                }
+            }
             ("about", 5) => self.about_open = true,
             ("timeline" | "timelinezoom" | "timelineoff", 5) => {
                 self.prefs.timeline_open = state != "timelineoff";

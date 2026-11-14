@@ -2,6 +2,10 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.033 · 2026-11-14 18:11
+
+- Export als Datei: Ohne „Jeden Titel als eigene Datei speichern“ zeigt die Liste nur noch Häkchen mit dem Titelnamen als Text, ohne Namensfelder. Die Namen werden nur für Einzeldateien gebraucht; mit der Option erscheinen die Felder wie bisher.
+
 ## 1.0.032 · 2026-11-14 17:57
 
 - Zwischenablage: Einfügen (Strg+V), Kopieren (Strg+C) und Ausschneiden (Strg+X) funktionieren jetzt in allen Textfeldern, etwa bei den Titelnamen im Export. Die Anbindung an die Windows-Zwischenablage war bisher nicht eingebaut.

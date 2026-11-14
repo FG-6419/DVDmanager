@@ -318,6 +318,12 @@ impl App {
                     dlg.vob_sel.resize(rows.len(), false);
                     dlg.names.resize(rows.len(), String::new());
                     for (i, default) in rows.iter().enumerate() {
+                        if !separate {
+                            // Eine gemeinsame Datei: nur auswählen, welche Titel hinein kommen
+                            let name = if dlg.names[i].trim().is_empty() { default.clone() } else { dlg.names[i].clone() };
+                            style::check(ui, &p, &mut dlg.vob_sel[i], &name);
+                            continue;
+                        }
                         ui.horizontal(|ui| {
                             style::check(ui, &p, &mut dlg.vob_sel[i], "");
                             // Der Name lässt sich ändern; beim Neu-Zusammenstellen bleibt er am Eintrag.
