@@ -243,7 +243,21 @@ impl Disc {
             spaces.push((Space::menu(*n), v.menu_admap.clone(), conv(&v.menu_cells)));
             spaces.push((Space::title(*n), v.admap.clone(), conv(&v.cells)));
         }
-        let budget: u64 = spaces.iter().map(|s| s.1.len() as u64).sum::<u64>().max(1);
+        // Schnellanalyse: wenige Stichproben genügen, denn Ton und Untertitel haben eine
+        // nahezu feste Datenrate; der Rest folgt aus Zellgröße und Spieldauer. Der größte
+        // Titelbereich (meist der Hauptfilm) bekommt 24, kleinere entsprechend weniger, Menüs 4.
+        // Jede Stichprobe ist auf einer DVD im Laufwerk ein Sprung des Lesekopfs.
+        let largest = spaces.iter().filter(|s| !s.0.menu).map(|s| s.1.len()).max().unwrap_or(1).max(1);
+        let samples = |space: &Space, vobus: usize| -> usize {
+            if full {
+                usize::MAX
+            } else if space.menu {
+                4
+            } else {
+                6 + 18 * vobus / largest
+            }
+        };
+        let budget: u64 = spaces.iter().map(|s| s.1.len().min(samples(&s.0, s.1.len())) as u64).sum::<u64>().max(1);
         let mut seen = 0u64;
         let mut stats: HashMap<CellKey, CellStats> = HashMap::new();
         let mut scrambled = false;
@@ -255,9 +269,7 @@ impl Disc {
             if total == 0 {
                 continue;
             }
-            // Schnellanalyse: wenige Stichproben genügen, denn Ton und Untertitel haben eine
-            // nahezu feste Datenrate; der Rest folgt aus Zellgröße und Spieldauer.
-            let sample = if full { usize::MAX } else if space.menu { 8 } else { 24 };
+            let sample = samples(space, admap.len());
             let mut sample_secs = 0.0f64;
             let mut timed_samples = 0usize;
             // Welche Spuren es in welcher Zelle gibt, und wie lange die Stichproben je Spur liefen
@@ -334,10 +346,9 @@ impl Disc {
                     measured.entry(k).or_default().add(&st);
                 }
                 seen += 1;
-                if seen % 16 == 0 {
+                if full && seen % 16 == 0 || !full {
                     let frac = seen as f32 / budget as f32;
-                    let done_frac = if full { frac } else { frac.min(1.0).sqrt() };
-                    if !progress(done_frac.min(0.99), tr!("Analysiere die DVD …", "Analysing the DVD …")) {
+                    if !progress(frac.min(0.99), tr!("Analysiere die DVD …", "Analysing the DVD …")) {
                         return Err(tr!("Abgebrochen", "Cancelled").into());
                     }
                 }

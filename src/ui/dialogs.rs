@@ -146,44 +146,17 @@ impl App {
         if self.loader.is_some() {
             let mut cancel = false;
             let mut toggle_live = false;
-            let (progress, text, thumbs, live_on, live_tex) = {
+            let (progress, text, live_on, live_tex) = {
                 let l = self.loader.as_ref().unwrap();
-                let thumbs: Vec<(usize, u64, egui::TextureId, Vec2)> =
-                    l.thumbs.iter().map(|(n, ms, t)| (*n, *ms, t.id(), t.size_vec2())).collect();
-                (l.progress, l.text.clone(), thumbs, l.live.enabled(), l.live.texture())
+                (l.progress, l.text.clone(), l.live.enabled(), l.live.texture())
             };
-            // Mit Vorschaubildern wird das Fenster breiter, damit drei Bilder nebeneinander passen.
-            let width = if thumbs.is_empty() { 420.0 } else { 520.0 };
-            modal(ctx, &p, "laden", width, |ui| {
+            modal(ctx, &p, "laden", 420.0, |ui| {
                 ui.label(RichText::new(text).family(semibold()).size(16.0));
                 ui.add_space(8.0);
                 progress_bar(ui, &p, progress);
                 if live_on {
                     ui.add_space(12.0);
                     live_picture(ui, &p, live_tex);
-                }
-                if !thumbs.is_empty() {
-                    ui.add_space(12.0);
-                    let gap = 10.0;
-                    let w = (ui.available_width() - 2.0 * gap) / 3.0;
-                    for row in thumbs.chunks(3) {
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = gap;
-                            for (n, ms, id, size) in row {
-                                ui.vertical(|ui| {
-                                    ui.set_width(w);
-                                    // Einheitliche 16:9-Kachel, das Bild passend hinein
-                                    let (tile, _) = ui.allocate_exact_size(Vec2::new(w, w * 9.0 / 16.0), egui::Sense::hover());
-                                    ui.painter().rect_filled(tile, CornerRadius::same(6), p.screen);
-                                    let scale = (tile.width() / size.x.max(1.0)).min(tile.height() / size.y.max(1.0));
-                                    let r = egui::Rect::from_center_size(tile.center(), *size * scale);
-                                    ui.painter().image(*id, r, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
-                                    ui.label(RichText::new(trf!("Titel {n} · {}", "Title {n} · {}", fmt_time(*ms))).size(12.0).color(p.muted));
-                                });
-                            }
-                        });
-                        ui.add_space(4.0);
-                    }
                 }
                 ui.add_space(12.0);
                 ui.with_layout(Layout::right_to_left(Align::Min), |ui| {

@@ -2,6 +2,14 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.026 · 2026-11-14 12:51
+
+- Schnelleres Einlesen einer DVD:
+  - Die Titel-Vorschaubilder im Ladefenster entfallen. Sie haben parallel zur Analyse an ganz anderen Stellen der DVD gelesen und den Lesekopf ständig springen lassen.
+  - Der eigene Durchgang zur Kopierschutz-Prüfung vor der Analyse entfällt. Die Analyse erkennt den Kopierschutz selbst, die DVD wird also nur noch einmal abgefahren.
+  - Die Schnellanalyse nimmt weniger Stichproben: Der größte Titelbereich bekommt weiter 24, kleinere entsprechend weniger, Menüs 4 statt 8. Bei einer Test-DVD mit 44 Titelsets sind das rund 320 statt 860 Lesezugriffe, bei praktisch gleichen Größenangaben.
+  - Dadurch kommt auch das mitlaufende Bild früher. Der Fortschrittsbalken zählt jetzt die tatsächlichen Lesezugriffe und läuft dadurch gleichmäßiger.
+
 ## 1.0.025 · 2026-11-14 12:30
 
 - Mitlaufendes Vorschaubild: Beim Einlesen einer DVD, eines Ordners oder einer VOB-/MPEG-Datei und beim Export zeigt ein kleines Bild die Stelle, die gerade verarbeitet wird. Es aktualisiert sich etwa jede Sekunde. Eingeschaltet wird es mit dem Knopf „Bild anzeigen“ im jeweiligen Fenster; standardmäßig ist es aus, und die Wahl bleibt fürs nächste Mal gespeichert. Ausgeschaltet kostet es keine Rechenzeit.

@@ -47,8 +47,6 @@ pub enum TargetKind {
 
 enum LoadMsg {
     Progress(f32, String),
-    /// Vorschaubild eines Titels: Nummer, Länge (ms), Bild
-    Thumb(usize, u64, egui::ColorImage),
     Done(Box<Disc>),
     Failed(String),
 }
@@ -59,14 +57,10 @@ struct Loader {
     text: String,
     cancel: Arc<AtomicBool>,
     is_sample: bool,
-    /// Vorschaubilder der Titel, die schon fertig sind (Nummer, Länge, Bild)
-    thumbs: Vec<(usize, u64, egui::TextureHandle)>,
     /// Mitlaufendes Vorschaubild
     live: thumbs::LiveView,
 }
 
-/// Höchstens so viele Vorschaubilder beim Einlesen
-const LOAD_THUMBS: usize = 6;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum OutputKind {
@@ -719,7 +713,6 @@ impl App {
             text: tr!("DVD wird geöffnet …", "Opening DVD …").into(),
             cancel,
             is_sample,
-            thumbs: Vec::new(),
             live,
         });
     }
@@ -734,11 +727,6 @@ impl App {
                 LoadMsg::Progress(f, t) => {
                     l.progress = f;
                     l.text = t;
-                }
-                LoadMsg::Thumb(n, ms, img) => {
-                    let tex = ctx.load_texture(format!("laden-{n}"), img, egui::TextureOptions::LINEAR);
-                    l.thumbs.push((n, ms, tex));
-                    l.thumbs.sort_by_key(|t| t.0);
                 }
                 LoadMsg::Done(d) => finished = Some(Ok(d)),
                 LoadMsg::Failed(e) => finished = Some(Err(e)),
@@ -1368,13 +1356,13 @@ impl App {
                 }
             }
             ("loading", 2) => {
-                // Ladedialog mit Vorschaubildern: die DVD öffnen und das Einlesen offen halten
+                // Ladedialog mit Live-Bild: die DVD neu einlesen und das Fenster offen halten
                 if let Some(d) = self.disc.take() {
                     let origin = d.source.origin.clone();
-                    self.start_loader(ctx, false, move |tx, _cancel| {
-                        let disc = Disc::open(Source::open(&origin)?)?;
+                    self.prefs.live_preview = true;
+                    self.start_loader(ctx, false, move |tx, cancel| {
+                        let disc = load_and_analyse(Source::open(&origin)?, tx, cancel)?;
                         let _ = tx.send(LoadMsg::Progress(0.86, tr!("DVD wird analysiert …", "Analysing DVD …").into()));
-                        spawn_load_thumbs(&disc, tx.clone());
                         std::thread::sleep(std::time::Duration::from_secs(30));
                         Ok(disc)
                     });
@@ -1517,10 +1505,8 @@ fn load_and_analyse(
 ) -> Result<Disc, String> {
     let mut disc = Disc::open(source)?;
     let _ = tx.send(LoadMsg::Progress(0.8, tr!("DVD wird analysiert …", "Analysing DVD …").into()));
-    if disc.check_scrambled() {
-        return Err(copy_protected().into());
-    }
-    spawn_load_thumbs(&disc, tx.clone());
+    // Die Analyse erkennt den Kopierschutz selbst; ein eigener Durchgang vorher würde die
+    // DVD nur ein zweites Mal abfahren.
     let tx2 = tx.clone();
     let mut cb = |f: f32, t: &str| -> bool {
         let _ = tx2.send(LoadMsg::Progress(0.8 + f * 0.2, t.to_string()));
@@ -1531,36 +1517,6 @@ fn load_and_analyse(
         return Err(copy_protected().into());
     }
     Ok(disc)
-}
-
-/// Holt neben der Analyse für die längsten Titel je ein Vorschaubild. Läuft in einem
-/// eigenen Thread und endet von selbst, wenn das Einlesen vorbei ist.
-fn spawn_load_thumbs(disc: &Disc, tx: std::sync::mpsc::Sender<LoadMsg>) {
-    let mut picks: Vec<usize> = (0..disc.titles.len()).filter(|i| disc.titles[*i].ms > 0).collect();
-    picks.sort_by_key(|i| std::cmp::Reverse(disc.titles[*i].ms));
-    picks.truncate(LOAD_THUMBS);
-    let jobs: Vec<_> = picks
-        .into_iter()
-        .map(|i| {
-            let t = &disc.titles[i];
-            let segments = discslim::engine::preview::title_segments(disc, i, 0, t.chapters.len().saturating_sub(1));
-            // Nicht ganz am Anfang: dort ist oft noch Schwarzbild oder ein Logo.
-            let at = (t.ms as f64 * 0.15).min(300_000.0);
-            (t.number, t.ms, segments, at)
-        })
-        .collect();
-    let source = disc.source.clone();
-    std::thread::spawn(move || {
-        for (n, ms, segments, at) in jobs {
-            if segments.is_empty() {
-                continue;
-            }
-            let Some(img) = thumbs::grab_frame(source.clone(), segments, at, std::time::Duration::from_secs(5)) else { continue };
-            if tx.send(LoadMsg::Thumb(n, ms, img)).is_err() {
-                return; // Einlesen schon fertig
-            }
-        }
-    });
 }
 
 fn copy_protected() -> &'static str {
