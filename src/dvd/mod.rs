@@ -13,6 +13,20 @@ pub type Res<T> = Result<T, String>;
 /// Legt eine Ausgabedatei neu an. Überschreibt man eine vorhandene Datei, behält
 /// Windows sonst ihr altes Erstelldatum, und der Explorer zeigt die alte Uhrzeit.
 pub fn create_output(path: &std::path::Path) -> Res<std::fs::File> {
+    // Gibt es die Datei schon mit anderer Groß-/Kleinschreibung (z. B. film.vob statt
+    // film.VOB), behielte Windows beim Überschreiben den alten Namen. Dann vorher löschen.
+    if let (Some(dir), Some(name)) = (path.parent(), path.file_name()) {
+        let dir = if dir.as_os_str().is_empty() { std::path::Path::new(".") } else { dir };
+        let want = name.to_string_lossy();
+        if let Ok(rd) = std::fs::read_dir(dir) {
+            for e in rd.flatten() {
+                let have = e.file_name().to_string_lossy().to_string();
+                if have != want && have.to_lowercase() == want.to_lowercase() {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+    }
     let f = std::fs::File::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let now = std::time::SystemTime::now();
     let times = std::fs::FileTimes::new().set_modified(now).set_accessed(now);
@@ -45,6 +59,18 @@ mod output_tests {
         let fresh = |t: SystemTime| SystemTime::now().duration_since(t).unwrap_or_default() < Duration::from_secs(60);
         assert!(fresh(m.created().unwrap()), "Erstelldatum blieb alt");
         assert!(fresh(m.modified().unwrap()), "Änderungsdatum blieb alt");
+    }
+
+    /// Überschreiben mit anderer Groß-/Kleinschreibung: Der neue Name gilt.
+    #[test]
+    fn overwrite_takes_new_case() {
+        let dir = std::env::temp_dir().join(format!("dvdmanager-endung-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(dir.join("film.vob"), b"alt").unwrap();
+        super::write_output(&dir.join("film.VOB"), b"neu").unwrap();
+        let names: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(names, vec!["film.VOB".to_string()]);
     }
 }
 

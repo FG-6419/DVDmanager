@@ -104,6 +104,8 @@ pub struct BackupDialog {
     pub separate_dir: String,
     /// Namen der Titel (zugleich Dateinamen beim Export als Einzeldateien)
     pub names: Vec<String>,
+    /// Dateiendung groß schreiben: VOB, MPEG, MKV (aus den Einstellungen)
+    pub upper: [bool; 3],
 }
 
 pub struct Job {
@@ -166,6 +168,8 @@ pub struct Prefs {
     pub thumb_anim: bool,
     /// Länge der Schleife in Sekunden (auch beim Überfahren mit der Maus)
     pub thumb_loop_secs: u32,
+    /// Dateiendung beim Export groß schreiben: VOB, MPEG (.mpg), MKV
+    pub ext_upper: [bool; 3],
 }
 
 impl Default for Prefs {
@@ -201,6 +205,7 @@ impl Default for Prefs {
             autoplay: false,
             thumb_anim: false,
             thumb_loop_secs: 5,
+            ext_upper: [false; 3],
         }
     }
 }
@@ -292,6 +297,11 @@ impl App {
             }
             if let Some(v) = st.get_string("autoplay") {
                 prefs.autoplay = v == "1";
+            }
+            for (i, key) in ["ext_upper_vob", "ext_upper_mpg", "ext_upper_mkv"].iter().enumerate() {
+                if let Some(v) = st.get_string(key) {
+                    prefs.ext_upper[i] = v == "1";
+                }
             }
             if let Some(v) = st.get_string("thumb_anim") {
                 prefs.thumb_anim = v == "1";
@@ -1339,7 +1349,10 @@ impl App {
                 }
                 self.queue_open = true;
             }
-            ("settings", 5) => self.settings_open = true,
+            ("settings", 5) => {
+                self.settings_open = true;
+                self.prefs.ext_upper = [true, false, true];
+            }
             ("light", 5) => self.set_dark(ctx, false),
             ("play", 5) => self.preview.play(),
             ("sample", 1) => {
@@ -1572,6 +1585,9 @@ impl eframe::App for App {
         storage.set_string("deep", flag(self.prefs.deep_default));
         storage.set_string("autoplay", flag(self.prefs.autoplay));
         storage.set_string("thumb_anim", flag(self.prefs.thumb_anim));
+        for (i, key) in ["ext_upper_vob", "ext_upper_mpg", "ext_upper_mkv"].iter().enumerate() {
+            storage.set_string(key, flag(self.prefs.ext_upper[i]));
+        }
         storage.set_string("thumb_loop_secs", self.prefs.thumb_loop_secs.to_string());
         // Die kleine Zielgröße der Beispiel-DVD nicht als Vorgabe behalten
         let (kind, mb) = self.target_before_sample.unwrap_or((self.prefs.target_kind, self.prefs.custom_mb));

@@ -2,6 +2,12 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.023 · 2026-11-14 11:08
+
+- Neue Einstellung „Dateiendung beim Export“ (Einstellungen → Export): Für VOB, MPEG-2 und MKV getrennt wählbar, ob die Endung klein (.vob, .mpg, .mkv) oder groß (.VOB, .MPG, .MKV) geschrieben wird. Gilt für einzelne Dateien und für den Export als Einzeldateien; eine eingetippte Endung wird entsprechend angepasst.
+- Überschreibt man eine Datei, deren Name sich nur in Groß-/Kleinschreibung unterscheidet (film.vob → film.VOB), gilt jetzt die neue Schreibweise. Windows hätte sonst den alten Namen behalten.
+- Der Abschnitt „Backup“ in den Einstellungen heißt jetzt „Export“.
+
 ## 1.0.022 · 2026-11-14 10:48
 
 - Export: „Brennen“ ist keine eigene Ausgabe mehr, sondern die Option „Danach brennen“ beim ISO-Abbild.
