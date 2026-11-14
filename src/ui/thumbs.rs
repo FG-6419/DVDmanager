@@ -256,6 +256,17 @@ impl StripThumbs {
         self.cache.get(key)
     }
 
+    /// Ein schon fertiges Bild derselben Quelle, höchstens `within` ms von `ms` entfernt.
+    pub fn nearest(&self, tag: u64, ms: f64, within: f64) -> Option<&TextureHandle> {
+        self.cache
+            .iter()
+            .filter(|(k, _)| k.0 == tag)
+            .map(|(k, t)| ((k.1 as f64 - ms).abs(), t))
+            .filter(|(d, _)| *d <= within)
+            .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(_, t)| t)
+    }
+
     /// Legt fest, welche Bilder gebraucht werden (wichtigste zuerst); ersetzt die vorige Liste.
     pub fn request(&mut self, tag: u64, source: &Source, segments: &[Segment], keys: Vec<StripKey>) {
         let (lock, cv) = &*self.shared;

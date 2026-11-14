@@ -2,6 +2,10 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.031 · 2026-11-14 17:39
+
+- Zeitleiste: Die Standbilder liegen jetzt bei jeder Zoomstufe lückenlos nebeneinander. Bisher standen sie auf festen Zeitabständen, so dass je nach Zoom fast eine Kachel breite Lücken blieben. Jetzt zeigt jede Kachel das Bild an ihrem Anfang (auf ein feines Zeitraster gerundet, damit schon fertige Bilder beim Zoomen weiterverwendet werden). Solange ein Bild noch fehlt, steht dort etwas abgedunkelt ein fertiges Bild aus der Nähe statt einer leeren Fläche.
+
 ## 1.0.030 · 2026-11-14 17:17
 
 - Tonspur in der Zeitleiste deutlicher: Bisher war sie logarithmisch (in dB) dargestellt, bei Filmton sah das fast überall gleich hoch aus wie eine breite Linie. Jetzt:

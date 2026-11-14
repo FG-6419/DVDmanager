@@ -781,31 +781,45 @@ fn view_strip(
         }
     }
 
-    // Standbilder: Abstand als Zweierpotenz der Bilddauer, damit sie beim Zoomen wiederkehren
+    // Standbilder lückenlos nebeneinander. Die Zeit jeder Kachel wird auf ein Raster aus
+    // Bilddauer mal Zweierpotenz abgerundet (höchstens eine Kachel lang), damit beim Zoomen
+    // schon fertige Bilder wiederkehren.
     if enabled {
         let tile_w = thumbs_r.height() * aspect;
-        let step = tile_step(f64::from(tile_w) * mpp, fl);
+        let tile_ms = f64::from(tile_w) * mpp;
+        let step = tile_step(tile_ms / 2.0, fl);
         let exact = step < 1_500.0;
-        let first = ((view_lo / step).floor() as i64).max(0);
-        let last = ((view_lo + span) / step).ceil() as i64;
+        let first = ((view_lo / tile_ms).floor() as i64).max(0);
+        let last = ((view_lo + span) / tile_ms).ceil() as i64;
         let tag = s.tag;
         let mut keys = Vec::new();
         for k in first..=last {
-            let t = k as f64 * step;
+            let t = k as f64 * tile_ms;
             if t >= hi {
                 break;
             }
-            let key: super::thumbs::StripKey = (tag, t.round() as u64, exact);
+            let snapped = (t / step).floor() * step;
+            let key: super::thumbs::StripKey = (tag, snapped.round() as u64, exact);
             let r = Rect::from_min_size(egui::pos2(x_of(t), thumbs_r.top()), Vec2::new(tile_w, thumbs_r.height()));
+            let uv = Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
             match s.thumbs.as_ref().and_then(|th| th.get(&key)) {
                 Some(tex) => {
-                    painter.image(tex.id(), r, Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+                    painter.image(tex.id(), r, uv, Color32::WHITE);
                 }
                 None => {
-                    painter.rect_filled(r.shrink(1.0), CornerRadius::same(2), p.track);
+                    // Solange es fehlt: ein schon fertiges Bild aus der Nähe (etwas abgedunkelt)
+                    match s.thumbs.as_ref().and_then(|th| th.nearest(tag, snapped, tile_ms)) {
+                        Some(tex) => {
+                            painter.image(tex.id(), r, uv, Color32::from_gray(150));
+                        }
+                        None => {
+                            painter.rect_filled(r.shrink(1.0), CornerRadius::same(2), p.track);
+                        }
+                    }
                     keys.push(key);
                 }
             }
+            painter.line_segment([egui::pos2(r.left(), r.top()), egui::pos2(r.left(), r.bottom())], egui::Stroke::new(1.0, p.screen));
         }
         // Zuerst die Bilder nahe der Abspielposition (bzw. der Mitte)
         let focus = if pos >= view_lo && pos <= view_lo + span { pos } else { view_lo + span / 2.0 };
