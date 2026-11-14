@@ -1,6 +1,6 @@
 [package]
 name = "dvdmanager"
-version = "1.0.31"
+version = "1.0.32"
 edition = "2021"
 description = "Verkleinert eigene, ungeschuetzte Video-DVDs auf Rohling-Groesse"
 
@@ -13,7 +13,7 @@ name = "dvdmanager"
 path = "src/main.rs"
 
 [dependencies]
-eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "persistence", "wayland", "x11"] }
+eframe = { version = "0.37", default-features = false, features = ["clipboard", "default_fonts", "glow", "persistence", "wayland", "x11"] }
 egui-pop-phosphor = "0.15"
 rfd = "0.18"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

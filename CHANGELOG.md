@@ -2,6 +2,10 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.032 · 2026-11-14 17:57
+
+- Zwischenablage: Einfügen (Strg+V), Kopieren (Strg+C) und Ausschneiden (Strg+X) funktionieren jetzt in allen Textfeldern, etwa bei den Titelnamen im Export. Die Anbindung an die Windows-Zwischenablage war bisher nicht eingebaut.
+
 ## 1.0.031 · 2026-11-14 17:39
 
 - Zeitleiste: Die Standbilder liegen jetzt bei jeder Zoomstufe lückenlos nebeneinander. Bisher standen sie auf festen Zeitabständen, so dass je nach Zoom fast eine Kachel breite Lücken blieben. Jetzt zeigt jede Kachel das Bild an ihrem Anfang (auf ein feines Zeitraster gerundet, damit schon fertige Bilder beim Zoomen weiterverwendet werden). Solange ein Bild noch fehlt, steht dort etwas abgedunkelt ein fertiges Bild aus der Nähe statt einer leeren Fläche.
