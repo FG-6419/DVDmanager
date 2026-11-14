@@ -144,16 +144,21 @@ fn timeline_audio_peaks() {
     let track = TrackChoice { phys: a.phys, codec: Codec::of(&a.attr).unwrap(), channels: a.attr.channels };
     let segs = title_segments(&disc, ti, 0, t.chapters.len() - 1);
     let mut calls = 0;
-    let peaks = audio_peaks(&disc.source, &segs, &track, &mut |_, _| {
+    let levels = audio_peaks(&disc.source, &segs, &track, &mut |_, _| {
         calls += 1;
         true
     })
     .expect("kein Lautstärkeverlauf");
     assert!(calls >= 1);
+    let peaks = &levels.peak;
     let expect = (t.ms as f64 / PEAK_MS) as usize;
     assert!(peaks.len() >= expect && peaks.len() <= expect + 2, "{} Werte statt etwa {expect}", peaks.len());
+    assert_eq!(levels.rms.len(), peaks.len());
     let loud = peaks.iter().filter(|p| **p > 100).count();
     assert!(loud > 0, "nur Stille im Verlauf");
+    // Der mittlere Pegel liegt nie über dem Spitzenpegel und ist bei Ton nicht null
+    assert!(levels.rms.iter().zip(peaks).all(|(r, p)| r <= p));
+    assert!(levels.rms.iter().any(|r| *r > 50));
     // Abbrechen liefert kein Ergebnis
     assert!(audio_peaks(&disc.source, &segs, &track, &mut |_, _| false).is_none());
     let _ = std::fs::remove_dir_all(&w);

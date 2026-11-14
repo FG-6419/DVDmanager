@@ -2,6 +2,13 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.030 · 2026-11-14 17:17
+
+- Tonspur in der Zeitleiste deutlicher: Bisher war sie logarithmisch (in dB) dargestellt, bei Filmton sah das fast überall gleich hoch aus wie eine breite Linie. Jetzt:
+  - linear und auf den lautesten Ausschlag des Titels bezogen, so dass leise und laute Stellen klar unterschiedlich hoch sind;
+  - außen hell der Spitzenpegel, innen kräftig der mittlere Pegel (RMS), der zeigt, wie laut es tatsächlich ist; Dialoge, Musik und Pausen heben sich so voneinander ab;
+  - das Band ist höher (56 statt 36 Bildpunkte).
+
 ## 1.0.029 · 2026-11-14 17:08
 
 - Tonspur in der Zeitleiste: Unter den Standbildern zeigt ein Band den Lautstärkeverlauf der Tonspur, die auch die Vorschau abspielt (Spitzenpegel von −48 dB bis 0 dB, um die Mittellinie gespiegelt). Pausen und Szenenwechsel sind so beim Schneiden gut zu erkennen.

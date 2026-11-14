@@ -115,7 +115,9 @@ struct Wave {
 
 #[derive(Default)]
 struct WaveData {
-    peaks: Vec<u16>,
+    levels: preview::AudioLevels,
+    /// Lautester Spitzenpegel bisher (zum Anpassen der Höhe)
+    top: u16,
     done_ms: f64,
     finished: bool,
     failed: bool,
@@ -133,9 +135,10 @@ impl Wave {
                     if c2.load(Ordering::Relaxed) {
                         return false;
                     }
+                    let top = p.peak.iter().copied().max().unwrap_or(0);
                     if let Ok(mut g) = d2.lock() {
-                        g.peaks.clear();
-                        g.peaks.extend_from_slice(p);
+                        g.levels = p.clone();
+                        g.top = top;
                         g.done_ms = done;
                     }
                     ctx.request_repaint();
@@ -147,7 +150,8 @@ impl Wave {
             if let Ok(mut g) = d2.lock() {
                 match res {
                     Some(p) => {
-                        g.peaks = p;
+                        g.top = p.peak.iter().copied().max().unwrap_or(0);
+                        g.levels = p;
                         g.finished = true;
                     }
                     None => g.failed = !c2.load(Ordering::Relaxed),
@@ -168,16 +172,7 @@ impl Drop for Wave {
 /// Höhe der ausgeklappten Zeitleiste samt Werkzeugzeile.
 pub const STRIP_H: f32 = 156.0;
 /// Zusätzliche Höhe für die Tonspur.
-pub const WAVE_H: f32 = 36.0;
-
-/// Spitzenpegel (0..32768) als Anteil der Höhe: −48 dB … 0 dB.
-fn level(v: u16) -> f32 {
-    if v == 0 {
-        return 0.0;
-    }
-    let db = 20.0 * (f32::from(v) / 32768.0).log10();
-    ((db + 48.0) / 48.0).clamp(0.0, 1.0)
-}
+pub const WAVE_H: f32 = 56.0;
 
 /// Wie lange vor und nach einer Schnittstelle beim Anhören gespielt wird.
 pub const LISTEN_MS: f64 = 2_500.0;
@@ -745,7 +740,11 @@ fn view_strip(
         let mut note = None;
         match wave_data.as_ref().and_then(|d| d.lock().ok()) {
             Some(g) => {
-                let n = g.peaks.len();
+                // Linear und auf den lautesten Ausschlag des Titels bezogen: außen hell der
+                // Spitzenpegel, innen kräftig der mittlere Pegel (zeigt, wie laut es wirklich ist)
+                let n = g.levels.peak.len().min(g.levels.rms.len());
+                let scale = half / f32::from(g.top.max(1_000));
+                let soft = p.audio.gamma_multiply(0.45);
                 let mut x = area.left();
                 while x < area.right() && n > 0 {
                     let ta = view_lo + f64::from(x - area.left()) * mpp;
@@ -755,9 +754,16 @@ fn view_strip(
                     }
                     let a = ((ta / discslim::engine::preview::PEAK_MS).floor().max(0.0) as usize).min(n - 1);
                     let b = ((tb / discslim::engine::preview::PEAK_MS).ceil() as usize).clamp(a + 1, n);
-                    let v = g.peaks[a..b].iter().copied().max().unwrap_or(0);
-                    let h = (level(v) * half).max(0.5);
-                    painter.line_segment([egui::pos2(x + 0.5, mid - h), egui::pos2(x + 0.5, mid + h)], egui::Stroke::new(1.0, p.audio));
+                    let pk = g.levels.peak[a..b].iter().copied().max().unwrap_or(0);
+                    let ms: f32 = g.levels.rms[a..b].iter().map(|v| f32::from(*v).powi(2)).sum::<f32>() / (b - a) as f32;
+                    let hp = (f32::from(pk) * scale).min(half);
+                    let hr = (ms.sqrt() * scale).min(hp);
+                    if hp >= 0.5 {
+                        painter.line_segment([egui::pos2(x + 0.5, mid - hp), egui::pos2(x + 0.5, mid + hp)], egui::Stroke::new(1.0, soft));
+                    }
+                    if hr >= 0.5 {
+                        painter.line_segment([egui::pos2(x + 0.5, mid - hr), egui::pos2(x + 0.5, mid + hr)], egui::Stroke::new(1.0, p.audio));
+                    }
                     x += 1.0;
                 }
                 if g.failed {

@@ -273,11 +273,18 @@ pub fn still(source: &Source, segments: &[Segment], ms: f64, exact: bool) -> Opt
 /// Länge eines Abschnitts im Lautstärkeverlauf (Millisekunden).
 pub const PEAK_MS: f64 = 10.0;
 
-/// Lautstärkeverlauf einer Tonspur für die Zeitleiste: je `PEAK_MS` der Spitzenpegel
-/// (Betrag, 0..32768) beider Kanäle. Liest dafür den ganzen Bereich einmal durch.
-/// `progress` bekommt den bisherigen Verlauf und die schon gelesene Zeit; liefert es
-/// false, wird abgebrochen (Ergebnis None).
-pub fn audio_peaks(source: &Source, segments: &[Segment], track: &TrackChoice, progress: &mut dyn FnMut(&[u16], f64) -> bool) -> Option<Vec<u16>> {
+/// Lautstärkeverlauf: je `PEAK_MS` der Spitzenpegel und der mittlere Pegel (RMS) beider
+/// Kanäle, jeweils als Betrag 0..32768.
+#[derive(Clone, Default, Debug)]
+pub struct AudioLevels {
+    pub peak: Vec<u16>,
+    pub rms: Vec<u16>,
+}
+
+/// Lautstärkeverlauf einer Tonspur für die Zeitleiste. Liest dafür den ganzen Bereich
+/// einmal durch. `progress` bekommt den bisherigen Verlauf und die schon gelesene Zeit;
+/// liefert es false, wird abgebrochen (Ergebnis None).
+pub fn audio_peaks(source: &Source, segments: &[Segment], track: &TrackChoice, progress: &mut dyn FnMut(&AudioLevels, f64) -> bool) -> Option<AudioLevels> {
     let mut dec = TrackDecoder::new(track)?;
     let seg_base: Vec<f64> = segments
         .iter()
@@ -288,7 +295,12 @@ pub fn audio_peaks(source: &Source, segments: &[Segment], track: &TrackChoice, p
         })
         .collect();
     let total: f64 = segments.iter().map(|s| s.ms as f64).sum();
-    let mut peaks = vec![0u16; (total / PEAK_MS).ceil() as usize + 1];
+    let n = (total / PEAK_MS).ceil() as usize + 1;
+    let mut levels = AudioLevels { peak: vec![0u16; n], rms: vec![0u16; n] };
+    // Für den mittleren Pegel: Summe der Quadrate und Anzahl je Abschnitt
+    let mut sums = vec![0f32; n];
+    let mut counts = vec![0u32; n];
+    let mut dirty_from = usize::MAX;
     let mut chunks: Vec<(f64, Vec<i16>)> = Vec::new();
     let mut last_report = std::time::Instant::now();
     let per_sample = 1000.0 / 48_000.0;
@@ -315,25 +327,43 @@ pub fn audio_peaks(source: &Source, segments: &[Segment], track: &TrackChoice, p
             }
             for (t, pcm) in chunks.drain(..) {
                 for (i, fr) in pcm.chunks_exact(2).enumerate() {
-                    let a = fr[0].unsigned_abs().max(fr[1].unsigned_abs());
                     let b = ((t + i as f64 * per_sample) / PEAK_MS).max(0.0) as usize;
-                    if let Some(p) = peaks.get_mut(b) {
-                        *p = (*p).max(a);
+                    if b >= n {
+                        continue;
                     }
+                    let a = fr[0].unsigned_abs().max(fr[1].unsigned_abs());
+                    levels.peak[b] = levels.peak[b].max(a);
+                    let (l, r) = (f32::from(fr[0]), f32::from(fr[1]));
+                    sums[b] += (l * l + r * r) * 0.5;
+                    counts[b] += 1;
+                    dirty_from = dirty_from.min(b);
                 }
             }
             if last_report.elapsed().as_millis() > 300 {
                 last_report = std::time::Instant::now();
-                if !progress(&peaks, t0) {
+                fill_rms(&mut levels.rms, &sums, &counts, &mut dirty_from);
+                if !progress(&levels, t0) {
                     return None;
                 }
             }
         }
     }
-    if !progress(&peaks, total) {
+    dirty_from = 0;
+    fill_rms(&mut levels.rms, &sums, &counts, &mut dirty_from);
+    if !progress(&levels, total) {
         return None;
     }
-    Some(peaks)
+    Some(levels)
+}
+
+/// Rechnet den mittleren Pegel ab dem ersten geänderten Abschnitt neu aus.
+fn fill_rms(rms: &mut [u16], sums: &[f32], counts: &[u32], dirty_from: &mut usize) {
+    for b in (*dirty_from).min(rms.len())..rms.len() {
+        if counts[b] > 0 {
+            rms[b] = (sums[b] / counts[b] as f32).sqrt().min(32767.0) as u16;
+        }
+    }
+    *dirty_from = usize::MAX;
 }
 
 enum RevEnd {
