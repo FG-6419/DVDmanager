@@ -2,6 +2,13 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.029 · 2026-11-14 17:08
+
+- Tonspur in der Zeitleiste: Unter den Standbildern zeigt ein Band den Lautstärkeverlauf der Tonspur, die auch die Vorschau abspielt (Spitzenpegel von −48 dB bis 0 dB, um die Mittellinie gespiegelt). Pausen und Szenenwechsel sind so beim Schneiden gut zu erkennen.
+  - Ein- und ausschalten mit dem Knopf „Tonspur“ in der Werkzeugzeile der Zeitleiste; die Wahl bleibt gespeichert.
+  - Für den Verlauf wird der Titel einmal im Hintergrund ganz gelesen. Bis er fertig ist, füllt sich das Band von links, und rechts steht der Fortschritt. Das Ergebnis bleibt für die zuletzt gezeigten Titel erhalten.
+  - Weggeschnittene Bereiche sind auch in der Tonspur abgedunkelt.
+
 ## 1.0.028 · 2026-11-14 16:56
 
 - Die zoombare Zeitleiste steht jetzt direkt unter dem Vorschaubild, an Stelle der schmalen Leiste. Der Knopf „Zeitleiste“ schaltet zwischen beiden um, es ist immer nur eine zu sehen; die Wahl bleibt gespeichert. Beim Ziehen in der Zeitleiste zeigt die Zeitangabe die Stelle unter dem Zeiger.

@@ -181,6 +181,8 @@ pub struct Prefs {
     pub live_preview: bool,
     /// Zoombare Zeitleiste mit Standbildern unter der Vorschau ausgeklappt
     pub timeline_open: bool,
+    /// Tonspur (Lautstärkeverlauf) in der Zeitleiste zeigen
+    pub timeline_wave: bool,
 }
 
 impl Default for Prefs {
@@ -219,6 +221,7 @@ impl Default for Prefs {
             ext: ExtStyle::default(),
             live_preview: false,
             timeline_open: true,
+            timeline_wave: true,
         }
     }
 }
@@ -327,6 +330,9 @@ impl App {
             }
             if let Some(v) = st.get_string("timeline_open") {
                 prefs.timeline_open = v == "1";
+            }
+            if let Some(v) = st.get_string("timeline_wave") {
+                prefs.timeline_wave = v == "1";
             }
             if let Some(v) = st.get_string("thumb_loop_secs").and_then(|v| v.parse::<u32>().ok()) {
                 prefs.thumb_loop_secs = v.clamp(1, 60);
@@ -1625,6 +1631,7 @@ impl eframe::App for App {
         storage.set_string("thumb_anim", flag(self.prefs.thumb_anim));
         storage.set_string("live_preview", flag(self.prefs.live_preview));
         storage.set_string("timeline_open", flag(self.prefs.timeline_open));
+        storage.set_string("timeline_wave", flag(self.prefs.timeline_wave));
         for (i, key) in ["ext_upper_vob", "ext_upper_mpg", "ext_upper_mkv"].iter().enumerate() {
             storage.set_string(key, flag(self.prefs.ext.upper[i]));
         }

@@ -102,10 +102,82 @@ pub struct Strip {
     ctx_ms: Option<f64>,
     /// Abspielposition beim letzten Durchlauf (zum Nachführen des Ausschnitts)
     last_pos: f64,
+    /// Lautstärkeverläufe (zuletzt gebrauchte), je Quelle und Tonspur
+    waves: Vec<Wave>,
+}
+
+/// Lautstärkeverlauf einer Tonspur, im Hintergrund gelesen.
+struct Wave {
+    key: (u64, u8),
+    data: std::sync::Arc<std::sync::Mutex<WaveData>>,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[derive(Default)]
+struct WaveData {
+    peaks: Vec<u16>,
+    done_ms: f64,
+    finished: bool,
+    failed: bool,
+}
+
+impl Wave {
+    fn start(key: (u64, u8), source: Source, segments: Vec<Segment>, track: TrackChoice, ctx: egui::Context) -> Self {
+        use std::sync::atomic::Ordering;
+        let data = std::sync::Arc::new(std::sync::Mutex::new(WaveData::default()));
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (d2, c2) = (data.clone(), cancel.clone());
+        std::thread::spawn(move || {
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                preview::audio_peaks(&source, &segments, &track, &mut |p, done| {
+                    if c2.load(Ordering::Relaxed) {
+                        return false;
+                    }
+                    if let Ok(mut g) = d2.lock() {
+                        g.peaks.clear();
+                        g.peaks.extend_from_slice(p);
+                        g.done_ms = done;
+                    }
+                    ctx.request_repaint();
+                    true
+                })
+            }))
+            .ok()
+            .flatten();
+            if let Ok(mut g) = d2.lock() {
+                match res {
+                    Some(p) => {
+                        g.peaks = p;
+                        g.finished = true;
+                    }
+                    None => g.failed = !c2.load(Ordering::Relaxed),
+                }
+            }
+            ctx.request_repaint();
+        });
+        Self { key, data, cancel }
+    }
+}
+
+impl Drop for Wave {
+    fn drop(&mut self) {
+        self.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 /// Höhe der ausgeklappten Zeitleiste samt Werkzeugzeile.
 pub const STRIP_H: f32 = 156.0;
+/// Zusätzliche Höhe für die Tonspur.
+pub const WAVE_H: f32 = 36.0;
+
+/// Spitzenpegel (0..32768) als Anteil der Höhe: −48 dB … 0 dB.
+fn level(v: u16) -> f32 {
+    if v == 0 {
+        return 0.0;
+    }
+    let db = 20.0 * (f32::from(v) / 32768.0).log10();
+    ((db + 48.0) / 48.0).clamp(0.0, 1.0)
+}
 
 /// Wie lange vor und nach einer Schnittstelle beim Anhören gespielt wird.
 pub const LISTEN_MS: f64 = 2_500.0;
@@ -521,6 +593,8 @@ fn view_strip(
     cut: (Option<u64>, Option<u64>),
     entry: Option<usize>,
     cut_action: &mut Option<(usize, bool, u64)>,
+    wave: &mut bool,
+    track: Option<TrackChoice>,
 ) {
     let ctx = ui.ctx().clone();
     if st.strip.thumbs.is_none() {
@@ -568,7 +642,18 @@ fn view_strip(
         if super::style::icon_button(ui, p, ic::ARROWS_OUT_LINE_HORIZONTAL, tr!("Ganze Länge zeigen", "Show whole length")).clicked() {
             zoom_to = Some(full);
         }
-        ui.add_space(8.0);
+        ui.add_space(6.0);
+        if ui
+            .selectable_label(*wave, RichText::new(trf!("{}  Tonspur", "{}  Audio", ic::WAVEFORM)).size(12.5))
+            .on_hover_text(tr!(
+                "Lautstärkeverlauf der Tonspur unter den Standbildern zeigen. Dafür wird der Titel einmal im Hintergrund ganz gelesen.",
+                "Show the audio level below the stills. The title is read once in the background for this."
+            ))
+            .clicked()
+        {
+            *wave = !*wave;
+        }
+        ui.add_space(6.0);
         let span = s.ms_per_px * f64::from(width);
         ui.label(
             RichText::new(trf!("Ausschnitt {}", "Showing {}", super::views::fmt_time_precise(span.min(hi - lo) as u64)))
@@ -586,7 +671,8 @@ fn view_strip(
 
     let ruler_h = 18.0f32;
     let thumb_h = 58.0f32;
-    let (area, resp) = ui.allocate_exact_size(Vec2::new(width, ruler_h + thumb_h + 4.0), Sense::click_and_drag());
+    let wave_h = if *wave { WAVE_H } else { 0.0 };
+    let (area, resp) = ui.allocate_exact_size(Vec2::new(width, ruler_h + thumb_h + 4.0 + wave_h), Sense::click_and_drag());
     let span_of = |mpp: f64| mpp * f64::from(area.width());
 
     // Zoomen um einen Ankerpunkt (Zeit bleibt an derselben Stelle)
@@ -635,7 +721,59 @@ fn view_strip(
     let painter = ui.painter_at(area);
     painter.rect_filled(area, CornerRadius::same(6), p.screen);
     let ruler = Rect::from_min_size(area.min, Vec2::new(area.width(), ruler_h));
-    let thumbs_r = Rect::from_min_max(egui::pos2(area.left(), ruler.bottom() + 2.0), egui::pos2(area.right(), area.bottom() - 2.0));
+    let thumbs_r = Rect::from_min_size(egui::pos2(area.left(), ruler.bottom() + 2.0), Vec2::new(area.width(), thumb_h));
+    let wave_r = Rect::from_min_max(egui::pos2(area.left(), thumbs_r.bottom() + 2.0), egui::pos2(area.right(), area.bottom() - 2.0));
+
+    // Tonspur: Spitzenpegel je Bildpunktspalte, gespiegelt um die Mittellinie
+    if *wave {
+        let wave_data = match (enabled, source, track) {
+            (true, Some(src), Some(tr)) => {
+                let key = (s.tag, tr.phys);
+                if !s.waves.iter().any(|w| w.key == key) {
+                    s.waves.push(Wave::start(key, src.clone(), st.segments.clone(), tr, ctx.clone()));
+                    if s.waves.len() > 3 {
+                        s.waves.remove(0);
+                    }
+                }
+                s.waves.iter().find(|w| w.key == key).map(|w| w.data.clone())
+            }
+            _ => None,
+        };
+        let mid = wave_r.center().y;
+        let half = wave_r.height() / 2.0;
+        painter.line_segment([egui::pos2(area.left(), mid), egui::pos2(area.right(), mid)], egui::Stroke::new(1.0, p.track));
+        let mut note = None;
+        match wave_data.as_ref().and_then(|d| d.lock().ok()) {
+            Some(g) => {
+                let n = g.peaks.len();
+                let mut x = area.left();
+                while x < area.right() && n > 0 {
+                    let ta = view_lo + f64::from(x - area.left()) * mpp;
+                    let tb = ta + mpp;
+                    if ta > g.done_ms && !g.finished {
+                        break;
+                    }
+                    let a = ((ta / discslim::engine::preview::PEAK_MS).floor().max(0.0) as usize).min(n - 1);
+                    let b = ((tb / discslim::engine::preview::PEAK_MS).ceil() as usize).clamp(a + 1, n);
+                    let v = g.peaks[a..b].iter().copied().max().unwrap_or(0);
+                    let h = (level(v) * half).max(0.5);
+                    painter.line_segment([egui::pos2(x + 0.5, mid - h), egui::pos2(x + 0.5, mid + h)], egui::Stroke::new(1.0, p.audio));
+                    x += 1.0;
+                }
+                if g.failed {
+                    note = Some(tr!("Ton dieser Spur lässt sich nicht lesen", "This audio track cannot be read").to_string());
+                } else if !g.finished {
+                    let total = (st.total_ms as f64).max(1.0);
+                    note = Some(trf!("Ton wird gelesen … {} %", "Reading audio … {} %", ((g.done_ms / total) * 100.0).clamp(0.0, 99.0) as u32));
+                }
+            }
+            None if enabled => note = Some(tr!("Keine Tonspur", "No audio track").to_string()),
+            None => {}
+        }
+        if let Some(text) = note {
+            painter.text(egui::pos2(wave_r.right() - 8.0, mid), Align2::RIGHT_CENTER, text, FontId::proportional(11.5), p.muted);
+        }
+    }
 
     // Standbilder: Abstand als Zweierpotenz der Bilddauer, damit sie beim Zoomen wiederkehren
     if enabled {
@@ -698,10 +836,10 @@ fn view_strip(
         let b = cut.1.map(|v| (v as f64).min(hi)).unwrap_or(hi);
         let shade = Color32::from_black_alpha(150);
         if a > view_lo {
-            painter.rect_filled(Rect::from_min_max(egui::pos2(area.left(), thumbs_r.top()), egui::pos2(x_of(a), thumbs_r.bottom())), CornerRadius::ZERO, shade);
+            painter.rect_filled(Rect::from_min_max(egui::pos2(area.left(), thumbs_r.top()), egui::pos2(x_of(a), area.bottom() - 2.0)), CornerRadius::ZERO, shade);
         }
         if b < view_lo + span {
-            painter.rect_filled(Rect::from_min_max(egui::pos2(x_of(b), thumbs_r.top()), egui::pos2(area.right(), thumbs_r.bottom())), CornerRadius::ZERO, shade);
+            painter.rect_filled(Rect::from_min_max(egui::pos2(x_of(b), thumbs_r.top()), egui::pos2(area.right(), area.bottom() - 2.0)), CornerRadius::ZERO, shade);
         }
     }
     for (ms, _) in &st.chapters {
@@ -1226,7 +1364,8 @@ impl App {
         let avail = ui.available_size();
         // Entweder die schmale Leiste oder die zoombare Zeitleiste (an deren Stelle)
         let strip_open = self.prefs.timeline_open;
-        let controls_h = 124.0 + if strip_open { STRIP_H - 18.0 } else { 0.0 };
+        let controls_h = 124.0 + if strip_open { STRIP_H - 18.0 + if self.prefs.timeline_wave { WAVE_H } else { 0.0 } } else { 0.0 };
+        let strip_track = self.disc.as_ref().and_then(|d| self.preview_track(d));
         // Schnittmarken (Millisekunden) und Eintrag für die zoombare Zeitleiste
         let strip_cut = match sel {
             Selection::Entry(i) => self.plan.reauthor.get(i).map(|e| (e.cut.start_ms, e.cut.end_ms)).unwrap_or((None, None)),
@@ -1310,7 +1449,7 @@ impl App {
         ui.add_space(8.0);
         if strip_open {
             // Zoombare Zeitleiste mit Standbildern an Stelle der schmalen Leiste
-            view_strip(st, ui, &p, strip_source, strip_cut, strip_entry, &mut cut_action);
+            view_strip(st, ui, &p, strip_source, strip_cut, strip_entry, &mut cut_action, &mut self.prefs.timeline_wave, strip_track);
         } else {
             let width = ui.available_width();
             let (bar, resp) = ui.allocate_exact_size(Vec2::new(width, 18.0), Sense::click_and_drag());
@@ -1442,8 +1581,7 @@ impl App {
         }
 
         let jump_secs = &mut self.prefs.jump_secs;
-        let timeline_open = &mut self.prefs.timeline_open;
-        // Erste Zeile: Navigation, Sprünge, Zeit, Kapitel
+        let timeline_open = &mut self.prefs.timeline_open;        // Erste Zeile: Navigation, Sprünge, Zeit, Kapitel
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             let enabled = !st.segments.is_empty();

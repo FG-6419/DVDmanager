@@ -270,6 +270,72 @@ pub fn still(source: &Source, segments: &[Segment], ms: f64, exact: bool) -> Opt
     }
 }
 
+/// Länge eines Abschnitts im Lautstärkeverlauf (Millisekunden).
+pub const PEAK_MS: f64 = 10.0;
+
+/// Lautstärkeverlauf einer Tonspur für die Zeitleiste: je `PEAK_MS` der Spitzenpegel
+/// (Betrag, 0..32768) beider Kanäle. Liest dafür den ganzen Bereich einmal durch.
+/// `progress` bekommt den bisherigen Verlauf und die schon gelesene Zeit; liefert es
+/// false, wird abgebrochen (Ergebnis None).
+pub fn audio_peaks(source: &Source, segments: &[Segment], track: &TrackChoice, progress: &mut dyn FnMut(&[u16], f64) -> bool) -> Option<Vec<u16>> {
+    let mut dec = TrackDecoder::new(track)?;
+    let seg_base: Vec<f64> = segments
+        .iter()
+        .scan(0.0f64, |acc, s| {
+            let b = *acc;
+            *acc += s.ms as f64;
+            Some(b)
+        })
+        .collect();
+    let total: f64 = segments.iter().map(|s| s.ms as f64).sum();
+    let mut peaks = vec![0u16; (total / PEAK_MS).ceil() as usize + 1];
+    let mut chunks: Vec<(f64, Vec<i16>)> = Vec::new();
+    let mut last_report = std::time::Instant::now();
+    let per_sample = 1000.0 / 48_000.0;
+    for (si, seg) in segments.iter().enumerate() {
+        let Ok(reader) = source.reader(seg.space) else { continue };
+        let mut vr = VobuReader::new(reader, u64::from(seg.first), u64::from(seg.last) + 1);
+        dec.flush();
+        while let Ok(Some((_, data))) = vr.next() {
+            let t0 = seg_base[si] + Nav::cell_elapsed_ms(&data) as f64;
+            let s_ptm = i64::from(crate::dvd::be32(&data, crate::dvd::vob::PCI_OFF + 12));
+            for s in data.chunks_exact(SECTOR) {
+                if let Some(pes) = audio_pes(s, track) {
+                    let time = pes.pts.map(|p| {
+                        let mut d = p as i64 - s_ptm;
+                        if d > 1 << 32 {
+                            d -= 1 << 33;
+                        } else if d < -(1 << 32) {
+                            d += 1 << 33;
+                        }
+                        t0 + d as f64 / 90.0
+                    });
+                    dec.feed(&pes, time, &mut chunks);
+                }
+            }
+            for (t, pcm) in chunks.drain(..) {
+                for (i, fr) in pcm.chunks_exact(2).enumerate() {
+                    let a = fr[0].unsigned_abs().max(fr[1].unsigned_abs());
+                    let b = ((t + i as f64 * per_sample) / PEAK_MS).max(0.0) as usize;
+                    if let Some(p) = peaks.get_mut(b) {
+                        *p = (*p).max(a);
+                    }
+                }
+            }
+            if last_report.elapsed().as_millis() > 300 {
+                last_report = std::time::Instant::now();
+                if !progress(&peaks, t0) {
+                    return None;
+                }
+            }
+        }
+    }
+    if !progress(&peaks, total) {
+        return None;
+    }
+    Some(peaks)
+}
+
 enum RevEnd {
     Quit,
     Cmd(PreviewCmd),

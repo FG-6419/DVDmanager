@@ -132,6 +132,34 @@ fn timeline_stills() {
 }
 
 #[test]
+fn timeline_audio_peaks() {
+    use discslim::engine::audio::{Codec, TrackChoice};
+    use discslim::engine::preview::{audio_peaks, title_segments, PEAK_MS};
+    let w = work("tonspur");
+    let src = demo::build_sample(&w, |_| {}).unwrap();
+    let disc = open_analysed(&src);
+    let ti = longest_title(&disc);
+    let t = &disc.titles[ti];
+    let a = t.audio.iter().find(|a| Codec::of(&a.attr).is_some()).expect("keine Tonspur");
+    let track = TrackChoice { phys: a.phys, codec: Codec::of(&a.attr).unwrap(), channels: a.attr.channels };
+    let segs = title_segments(&disc, ti, 0, t.chapters.len() - 1);
+    let mut calls = 0;
+    let peaks = audio_peaks(&disc.source, &segs, &track, &mut |_, _| {
+        calls += 1;
+        true
+    })
+    .expect("kein Lautstärkeverlauf");
+    assert!(calls >= 1);
+    let expect = (t.ms as f64 / PEAK_MS) as usize;
+    assert!(peaks.len() >= expect && peaks.len() <= expect + 2, "{} Werte statt etwa {expect}", peaks.len());
+    let loud = peaks.iter().filter(|p| **p > 100).count();
+    assert!(loud > 0, "nur Stille im Verlauf");
+    // Abbrechen liefert kein Ergebnis
+    assert!(audio_peaks(&disc.source, &segs, &track, &mut |_, _| false).is_none());
+    let _ = std::fs::remove_dir_all(&w);
+}
+
+#[test]
 fn custom_chapter_marks() {
     let w = work("kapitel");
     let src = demo::build_sample(&w, |_| {}).unwrap();
