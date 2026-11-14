@@ -125,13 +125,15 @@ pub struct HoverLoop {
     seek_id: u64,
     next_at: Instant,
     pub seen_this_frame: bool,
+    /// Wofür die Schleife läuft (Titel, Kapitel von/bis, Bereich); ändert sich das, neu starten
+    pub tag: (usize, usize, usize, u64, u64),
 }
 
 impl HoverLoop {
     pub fn start(key: (usize, u8), source: Source, segments: Vec<Segment>, range: (f64, f64)) -> Self {
         let handle = preview::spawn(source, segments, 0.0, None, 0, None);
         let _ = handle.cmd.send(PreviewCmd::SeekTime { ms: range.0, exact: true, id: 1 });
-        Self { key, handle, texture: None, range, seek_id: 1, next_at: Instant::now(), seen_this_frame: true }
+        Self { key, handle, texture: None, range, seek_id: 1, next_at: Instant::now(), seen_this_frame: true, tag: (0, 0, 0, 0, 0) }
     }
 
     pub fn texture(&self) -> Option<egui::TextureId> {

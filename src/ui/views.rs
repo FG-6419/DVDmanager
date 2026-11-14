@@ -509,7 +509,10 @@ impl App {
                     i,
                     &e,
                     selected,
-                    &trf!("{}. Titel {}", "{}. Title {}", i + 1, t.number),
+                    &match e.name.as_deref().filter(|n| !n.trim().is_empty()) {
+                        Some(name) => format!("{}. {name}", i + 1),
+                        None => trf!("{}. Titel {}", "{}. Title {}", i + 1, t.number),
+                    },
                     &chapters,
                     &fmt_size(size),
                     mode_label(e.settings.video),
@@ -713,7 +716,8 @@ impl App {
     }
 
     /// Listenzeile eines Eintrags mit Vorschaubildern von Schnittanfang und -ende.
-    /// Steht die Maus über einem Bild, laufen die ersten bzw. letzten 5 Sekunden als Schleife.
+    /// Steht die Maus über einem Bild (oder mit der Einstellung dauerhaft), laufen die ersten
+    /// bzw. letzten Sekunden als Schleife; die Länge steht in den Einstellungen.
     #[allow(clippy::too_many_arguments)]
     fn entry_row(
         &mut self,
@@ -749,21 +753,40 @@ impl App {
         let hover_pos = ui.ctx().pointer_hover_pos();
         let tw = 58.0;
         let th = 34.0;
+        // Schleifenlänge aus den Einstellungen; dauerhaft nur, wenn eingeschaltet und nicht von DVD
+        let loop_ms = f64::from(self.prefs.thumb_loop_secs.max(1)) * 1000.0;
+        let anim = self.thumb_anim_active();
         for (k, at) in [(0u8, s), (1u8, end_frame)] {
             let x = rect.left() + 8.0 + f32::from(k) * (tw + 4.0);
             let r = Rect::from_min_size(egui::pos2(x, rect.center().y - th / 2.0), Vec2::new(tw, th));
             painter.rect_filled(r, CornerRadius::same(4), p.screen);
             let hovered = hover_pos.is_some_and(|h| r.contains(h)) && resp.hovered();
             let mut tex = None;
-            if hovered {
-                let range = if k == 0 {
-                    (s as f64, (s as f64 + 5000.0).min(end as f64))
-                } else {
-                    ((end as f64 - 5000.0).max(s as f64), end as f64)
-                };
-                let restart = self.hover_loop.as_ref().map(|l| l.key != (i, k)).unwrap_or(true);
+            let range = if k == 0 {
+                (s as f64, (s as f64 + loop_ms).min(end as f64))
+            } else {
+                ((end as f64 - loop_ms).max(s as f64), end as f64)
+            };
+            let tag = (e.title, e.first_chapter, e.last_chapter, range.0 as u64, range.1 as u64);
+            // Höchstens 24 Schleifen gleichzeitig, jede dekodiert im Hintergrund
+            let room = self.anim_loops.contains_key(&(i, k)) || self.anim_loops.len() < 24;
+            if anim && room && ui.is_rect_visible(r) {
+                let restart = self.anim_loops.get(&(i, k)).is_none_or(|l| l.tag != tag);
                 if restart {
-                    self.hover_loop = Some(super::thumbs::HoverLoop::start((i, k), disc.source.clone(), seg(), range));
+                    let mut l = super::thumbs::HoverLoop::start((i, k), disc.source.clone(), seg(), range);
+                    l.tag = tag;
+                    self.anim_loops.insert((i, k), l);
+                }
+                if let Some(l) = self.anim_loops.get_mut(&(i, k)) {
+                    l.seen_this_frame = true;
+                    tex = l.texture();
+                }
+            } else if hovered {
+                let restart = self.hover_loop.as_ref().map(|l| l.key != (i, k) || l.tag != tag).unwrap_or(true);
+                if restart {
+                    let mut l = super::thumbs::HoverLoop::start((i, k), disc.source.clone(), seg(), range);
+                    l.tag = tag;
+                    self.hover_loop = Some(l);
                 }
                 if let Some(l) = self.hover_loop.as_mut() {
                     l.seen_this_frame = true;

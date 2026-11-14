@@ -300,6 +300,54 @@ fn check_mkv(path: &Path) -> (Vec<u64>, usize, usize, f64) {
     (chapters, video, audio, duration)
 }
 
+/// Export als Einzeldateien: je Eintrag eine Datei, Fortschritt steigt bis zum Ende.
+#[test]
+fn separate_files() {
+    let w = work("einzeln");
+    let src = demo::build_sample(&w, |_| {}).unwrap();
+    let disc = Arc::new(open_analysed(&src));
+    let ti = longest_title(&disc);
+    let last = disc.titles[ti].chapters.len() - 1;
+    let total = disc.titles[ti].ms;
+    let mut plan = Plan::new(NO_TARGET);
+    plan.mode = Mode::Reauthor;
+    for (a, b) in [(0, total / 3), (total / 3, total * 2 / 3)] {
+        let mut e = ReauthorEntry::new(ti, 0, last, ItemSettings::default());
+        e.cut = Cut { start_ms: Some(a), end_ms: Some(b), exact: false };
+        plan.reauthor.push(e);
+    }
+    let names = ["Teil eins", "Teil zwei"];
+    let reqs: Vec<BackupRequest> = (0..2)
+        .map(|i| {
+            let only: Vec<bool> = (0..2).map(|k| k == i).collect();
+            let p = plan.for_single_file(&disc, &only, false);
+            let path = w.join(format!("{}.mkv", names[i]));
+            BackupRequest { disc: disc.clone(), plan: p, output: Output::Mkv { path, audio: None }, deep_analysis: i == 0 }
+        })
+        .collect();
+    let (tx, rx) = channel();
+    discslim::engine::backup::run_many(reqs, tx, Arc::new(AtomicBool::new(false)));
+    let mut second = false;
+    let mut summary = None;
+    for m in rx.iter() {
+        match m {
+            BackupMsg::Progress { fraction, .. } => assert!(fraction <= 1.0001, "Fortschritt {fraction}"),
+            BackupMsg::Stage(t) => second |= t.starts_with("Datei 2 von 2") || t.starts_with("File 2 of 2"),
+            BackupMsg::Done(s) => summary = Some(s),
+            BackupMsg::Failed(e) => panic!("fehlgeschlagen: {e}"),
+            BackupMsg::Cancelled => panic!("abgebrochen"),
+        }
+    }
+    let s = summary.expect("keine Rückmeldung");
+    assert_eq!(s.files, 2);
+    assert_eq!(s.path, w);
+    assert!(second, "keine Stufe für die zweite Datei");
+    for n in names {
+        let (_, video, _, duration) = check_mkv(&w.join(format!("{n}.mkv")));
+        assert!(video > 0 && duration > (total / 3) as f64 * 0.8, "{n}: {video} Bilder, {duration} ms");
+    }
+}
+
 /// MKV-Ausgabe: Kapitel an den Schnitten und an eigenen Marken.
 #[test]
 fn mkv_with_chapters() {

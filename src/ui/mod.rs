@@ -96,6 +96,14 @@ pub struct BackupDialog {
     pub deep: bool,
     /// Vorhandene Dateien, die überschrieben würden (Rückfrage läuft)
     pub overwrite: Option<Vec<String>>,
+    /// ISO: danach den Windows-Brenner öffnen
+    pub burn: bool,
+    /// VOB/MPEG/MKV: jeden gewählten Titel als eigene Datei
+    pub separate: bool,
+    /// Zielordner für die Einzeldateien
+    pub separate_dir: String,
+    /// Namen der Titel (zugleich Dateinamen beim Export als Einzeldateien)
+    pub names: Vec<String>,
 }
 
 pub struct Job {
@@ -154,6 +162,10 @@ pub struct Prefs {
     pub sheet_secs: u32,
     /// Titel in der Liste links beim Anklicken gleich abspielen
     pub autoplay: bool,
+    /// Vorschaubilder der Einträge dauerhaft als Schleife abspielen (nicht von einer DVD im Laufwerk)
+    pub thumb_anim: bool,
+    /// Länge der Schleife in Sekunden (auch beim Überfahren mit der Maus)
+    pub thumb_loop_secs: u32,
 }
 
 impl Default for Prefs {
@@ -187,6 +199,8 @@ impl Default for Prefs {
             sheet: false,
             sheet_secs: 60,
             autoplay: false,
+            thumb_anim: false,
+            thumb_loop_secs: 5,
         }
     }
 }
@@ -224,6 +238,10 @@ pub struct App {
     /// Vorschaubilder der Einträge und die Schleife unter der Maus
     thumbs: Option<thumbs::Thumbs>,
     hover_loop: Option<thumbs::HoverLoop>,
+    /// Dauerhaft laufende Schleifen der Vorschaubilder (Einstellung), je Eintrag und Seite
+    anim_loops: std::collections::HashMap<(usize, u8), thumbs::HoverLoop>,
+    /// Liegt die Quelle auf einem optischen Laufwerk? (Pfad, Ergebnis) – zwischengespeichert
+    optical: Option<(PathBuf, bool)>,
     target_before_sample: Option<(TargetKind, u32)>,
 
     /// Projekt, dessen DVD gerade geladen wird; danach gilt sein Plan.
@@ -274,6 +292,12 @@ impl App {
             }
             if let Some(v) = st.get_string("autoplay") {
                 prefs.autoplay = v == "1";
+            }
+            if let Some(v) = st.get_string("thumb_anim") {
+                prefs.thumb_anim = v == "1";
+            }
+            if let Some(v) = st.get_string("thumb_loop_secs").and_then(|v| v.parse::<u32>().ok()) {
+                prefs.thumb_loop_secs = v.clamp(1, 60);
             }
             if let Some(v) = st.get_string("custom_mb").and_then(|v| v.parse().ok()) {
                 prefs.custom_mb = v;
@@ -376,6 +400,8 @@ impl App {
             result: None,
             settings_open: false,
             about_open: false,
+            anim_loops: Default::default(),
+            optical: None,
             drives: Vec::new(),
             drives_at: None,
             keep_plan_on_load: false,
@@ -718,6 +744,7 @@ impl App {
             t.clear();
         }
         self.hover_loop = None;
+        self.anim_loops.clear();
         // Die kleine Zielgröße der Beispiel-DVD gilt nicht für echte DVDs.
         if let Some((kind, mb)) = self.target_before_sample.take() {
             self.prefs.target_kind = kind;
@@ -1175,7 +1202,35 @@ impl App {
                     }
                 }
             }
-            ("allcuts" | "autoplay", 5) => {
+            ("separate", 10) => {
+                // Export-Dialog: MKV als Einzeldateien, ein Eintrag umbenannt
+                if let Some(e) = self.plan.reauthor.get_mut(1) {
+                    e.name = Some("Strandszene".into());
+                }
+                self.open_backup_dialog();
+                if let Some(d) = self.backup_dlg.as_mut() {
+                    d.kind = OutputKind::Mkv;
+                    d.separate = true;
+                }
+            }
+            ("iso", 5) => {
+                self.open_backup_dialog();
+                if let Some(d) = self.backup_dlg.as_mut() {
+                    d.kind = OutputKind::Iso;
+                    d.burn = true;
+                }
+            }
+            ("anim", 6) => self.prefs.thumb_anim = true,
+            ("anim", n) if n % 20 == 0 => {
+                if let Ok(log) = std::env::var("DISCSLIM_DEV_LOG") {
+                    use std::io::Write;
+                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log) {
+                        let with_tex = self.anim_loops.values().filter(|l| l.texture().is_some()).count();
+                        let _ = writeln!(f, "Bild {n}: {} Schleifen, {with_tex} mit Bild, Maus-Schleife {}", self.anim_loops.len(), self.hover_loop.is_some());
+                    }
+                }
+            }
+            ("allcuts" | "autoplay" | "separate" | "anim", 5) => {
                 self.plan.mode = discslim::engine::plan::Mode::Reauthor;
                 if let Some(d) = self.disc.clone() {
                     for (i, t) in d.titles.iter().enumerate() {
@@ -1334,6 +1389,7 @@ impl App {
                     check: Some(check),
                     sheet: Some(PathBuf::from(r"D:\Filme\Szenen.jpg")),
                     extra_error: None,
+                    files: 1,
                 }));
             }
             _ => {}
@@ -1436,6 +1492,22 @@ fn copy_protected() -> &'static str {
 }
 
 
+impl App {
+    /// Dauerhafte Schleifen in den Vorschaubildern: eingeschaltet und die Quelle liegt
+    /// nicht auf einer DVD im Laufwerk (dort nur beim Überfahren mit der Maus).
+    pub(super) fn thumb_anim_active(&mut self) -> bool {
+        if !self.prefs.thumb_anim {
+            return false;
+        }
+        let Some(origin) = self.disc.as_ref().map(|d| d.source.origin.clone()) else { return false };
+        if self.optical.as_ref().is_none_or(|(p, _)| *p != origin) {
+            let opt = discslim::dvd::source::is_optical(&origin);
+            self.optical = Some((origin, opt));
+        }
+        !self.optical.as_ref().is_some_and(|(_, opt)| *opt)
+    }
+}
+
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.pump_loader(ctx);
@@ -1462,6 +1534,9 @@ impl eframe::App for App {
         if let Some(l) = self.hover_loop.as_mut() {
             l.seen_this_frame = false;
         }
+        for l in self.anim_loops.values_mut() {
+            l.seen_this_frame = false;
+        }
         egui::CentralPanel::default().frame(page).show(ui, |ui| {
             self.view_topbar(ui, &ctx);
             if self.disc.is_some() {
@@ -1479,6 +1554,11 @@ impl eframe::App for App {
         if let Some(l) = self.hover_loop.as_mut() {
             l.pump(&ctx);
         }
+        // Dauerschleifen nur für sichtbare Einträge; was nicht gezeichnet wurde, endet
+        self.anim_loops.retain(|_, l| l.seen_this_frame);
+        for l in self.anim_loops.values_mut() {
+            l.pump(&ctx);
+        }
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
@@ -1491,6 +1571,8 @@ impl eframe::App for App {
         storage.set_string("only_lang", flag(self.prefs.only_lang));
         storage.set_string("deep", flag(self.prefs.deep_default));
         storage.set_string("autoplay", flag(self.prefs.autoplay));
+        storage.set_string("thumb_anim", flag(self.prefs.thumb_anim));
+        storage.set_string("thumb_loop_secs", self.prefs.thumb_loop_secs.to_string());
         // Die kleine Zielgröße der Beispiel-DVD nicht als Vorgabe behalten
         let (kind, mb) = self.target_before_sample.unwrap_or((self.prefs.target_kind, self.prefs.custom_mb));
         storage.set_string("custom_mb", mb.to_string());

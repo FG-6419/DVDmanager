@@ -138,6 +138,9 @@ pub struct ReauthorEntry {
     /// Ein- und Ausblenden am Anfang und Ende des Eintrags
     #[serde(default)]
     pub fade: Fades,
+    /// Eigener Name, z. B. für die Datei beim Export als Einzeldateien
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// Art einer Blende.
@@ -200,7 +203,7 @@ pub const MIN_CHAPTER_GAP_MS: u64 = 1_000;
 
 impl ReauthorEntry {
     pub fn new(title: usize, first_chapter: usize, last_chapter: usize, settings: ItemSettings) -> Self {
-        Self { title, first_chapter, last_chapter, settings, cut: Cut::default(), chapter_marks: None, fade: Fades::default() }
+        Self { title, first_chapter, last_chapter, settings, cut: Cut::default(), chapter_marks: None, fade: Fades::default(), name: None }
     }
 
     /// Wirksame Blenden: nur bei bildgenauem Schnitt. Ohne ihn wird an Bildgruppen
@@ -423,6 +426,7 @@ impl Plan {
                     cut: Cut::default(),
                     chapter_marks: None,
                     fade: Fades::default(),
+                    name: None,
                 })
                 .collect(),
             Mode::Reauthor => self

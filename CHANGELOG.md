@@ -2,6 +2,13 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.022 · 2026-11-14 10:48
+
+- Export: „Brennen“ ist keine eigene Ausgabe mehr, sondern die Option „Danach brennen“ beim ISO-Abbild.
+- Export als Einzeldateien: Bei VOB, MPEG-2 und MKV mit mehreren Titeln speichert „Jeden Titel als eigene Datei speichern“ jeden gewählten Titel in eine eigene Datei im gewählten Ordner. Dateiname ist der Name des Titels in der Liste darunter; gleiche Namen werden durchnummeriert. Die Tiefenanalyse läuft nur einmal, „Zur Warteschlange“ legt je Datei einen Eintrag an. Bei Abbruch bleiben schon fertige Dateien erhalten.
+- Die Namen in der Titelliste des Export-Dialogs lassen sich ändern. Beim Neu-Zusammenstellen bleibt der Name am Eintrag, wird im Projekt gespeichert und erscheint auch in der Liste „Neue DVD“.
+- Neue Einstellungen unter „Vorschau“: „Vorschaubilder der Einträge dauerhaft abspielen“ lässt die kleinen Anfangs- und Endbilder in „Neue DVD“ ohne Maus als Schleife laufen, „Länge der Schleife“ stellt die Sekunden ein (gilt auch beim Überfahren mit der Maus). Liegt die Quelle auf einer DVD im Laufwerk, laufen die Schleifen nur beim Überfahren mit der Maus.
+
 ## 1.0.021 · 2026-11-13 12:04
 
 - „Titel bei Klicken automatisch abspielen“ gilt jetzt auch für die Liste „Neue DVD“: Ein Klick auf einen hinzugefügten, geschnittenen oder zerlegten Eintrag spielt ihn gleich ab dem Schnittanfang ab. Strg+Klick und Umschalt+Klick (Mehrfachauswahl) starten nichts.

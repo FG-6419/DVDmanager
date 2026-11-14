@@ -76,6 +76,8 @@ pub struct BackupSummary {
     pub sheet: Option<PathBuf>,
     /// Hinweis, wenn Prüfung oder Übersichtsbild nicht geklappt haben
     pub extra_error: Option<String>,
+    /// Anzahl geschriebener Dateien (Export als Einzeldateien); `path` ist dann der Ordner.
+    pub files: usize,
 }
 
 /// Ergebnis von Prüfung und Übersichtsbild.
@@ -940,24 +942,29 @@ fn start_windows_burner(iso_path: &Path) -> bool {
     std::process::Command::new("isoburn.exe").arg(iso_path).spawn().is_ok()
 }
 
+/// Tiefenanalyse vor dem Export (Fortschritt 0 bis 10 %).
+fn deep_analyse(disc: &Disc, tx: &Sender<BackupMsg>, cancel: &AtomicBool) -> Res<Disc> {
+    let _ = tx.send(BackupMsg::Stage(tr!("Tiefenanalyse", "Deep analysis").into()));
+    let mut d = disc.clone();
+    let mut cb = |f: f32, _t: &str| -> bool {
+        let _ = tx.send(BackupMsg::Progress {
+            fraction: f * 0.1,
+            sectors_out: 0,
+            ratio_in: 1.0,
+            current: tr!("Tiefenanalyse", "Deep analysis").into(),
+        });
+        !cancel.load(Ordering::Relaxed)
+    };
+    d.analyse(true, &mut cb).map_err(|e| if e == tr!("Abgebrochen", "Cancelled") { CANCELLED.to_string() } else { e })?;
+    Ok(d)
+}
+
 fn run_inner(req: &BackupRequest, tx: &Sender<BackupMsg>, cancel: &AtomicBool) -> Res<BackupSummary> {
     let started = Instant::now();
 
     let analysed;
     let disc: &Disc = if req.deep_analysis && !req.disc.analysed_full {
-        let _ = tx.send(BackupMsg::Stage(tr!("Tiefenanalyse", "Deep analysis").into()));
-        let mut d = (*req.disc).clone();
-        let mut cb = |f: f32, _t: &str| -> bool {
-            let _ = tx.send(BackupMsg::Progress {
-                fraction: f * 0.1,
-                sectors_out: 0,
-                ratio_in: 1.0,
-                current: tr!("Tiefenanalyse", "Deep analysis").into(),
-            });
-            !cancel.load(Ordering::Relaxed)
-        };
-        d.analyse(true, &mut cb).map_err(|e| if e == tr!("Abgebrochen", "Cancelled") { CANCELLED.to_string() } else { e })?;
-        analysed = d;
+        analysed = deep_analyse(&req.disc, tx, cancel)?;
         &analysed
     } else {
         &req.disc
@@ -1040,6 +1047,7 @@ fn run_inner(req: &BackupRequest, tx: &Sender<BackupMsg>, cancel: &AtomicBool) -
             check: post.check,
             sheet: post.sheet,
             extra_error: post.error,
+            files: 1,
         });
     }
 
@@ -1149,7 +1157,108 @@ fn run_inner(req: &BackupRequest, tx: &Sender<BackupMsg>, cancel: &AtomicBool) -
         check: post.check,
         sheet: post.sheet,
         extra_error: post.error,
+        files: 1,
     })
+}
+
+/// Mehrere Ausgaben nacheinander (Export als Einzeldateien). Fortschritt und Stufen werden
+/// auf das Ganze umgerechnet, die Tiefenanalyse läuft nur einmal. Bei Abbruch oder Fehler
+/// bleiben die schon fertigen Dateien erhalten.
+fn run_many_inner(mut reqs: Vec<BackupRequest>, tx: &Sender<BackupMsg>, cancel: &AtomicBool) -> Res<BackupSummary> {
+    let started = Instant::now();
+    let n = reqs.len().max(1);
+    if let Some(first) = reqs.first() {
+        if first.deep_analysis && !first.disc.analysed_full {
+            let d = Arc::new(deep_analyse(&first.disc, tx, cancel)?);
+            for r in &mut reqs {
+                r.disc = d.clone();
+                r.deep_analysis = false;
+            }
+        }
+    }
+    let mut all: Vec<BackupSummary> = Vec::new();
+    for (k, req) in reqs.iter().enumerate() {
+        let name = match &req.output {
+            Output::Vob(p) | Output::Mpeg { path: p, .. } | Output::Mkv { path: p, .. } | Output::Iso(p) | Output::Burn(p) | Output::Folder(p) => {
+                p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default()
+            }
+        };
+        let prefix = trf!("Datei {} von {n} ({name})", "File {} of {n} ({name})", k + 1);
+        let (itx, irx) = std::sync::mpsc::channel::<BackupMsg>();
+        let prefix = &prefix;
+        let res = std::thread::scope(|s| {
+            let fwd = s.spawn(move || {
+                for m in irx.iter() {
+                    let m = match m {
+                        BackupMsg::Stage(t) => BackupMsg::Stage(format!("{prefix}: {t}")),
+                        BackupMsg::Progress { fraction, sectors_out, ratio_in, current } => {
+                            BackupMsg::Progress { fraction: (k as f32 + fraction) / n as f32, sectors_out, ratio_in, current }
+                        }
+                        other => other,
+                    };
+                    let _ = tx.send(m);
+                }
+            });
+            let r = run_inner(req, &itx, cancel);
+            drop(itx);
+            let _ = fwd.join();
+            r
+        });
+        match res {
+            Ok(s) => all.push(s),
+            Err(e) if e == CANCELLED => return Err(e),
+            Err(e) => return Err(trf!("{name}: {e}", "{name}: {e}")),
+        }
+    }
+    let first_path = all.first().map(|s| s.path.clone()).unwrap_or_default();
+    let dir = first_path.parent().map(Path::to_path_buf).unwrap_or(first_path);
+    // Auffälligkeiten der Prüfung je Datei als Text; Stellen beziehen sich auf die jeweilige Datei
+    let checked: Vec<&CheckReport> = all.iter().filter_map(|s| s.check.as_ref()).collect();
+    let mut notes: Vec<String> = Vec::new();
+    for s in &all {
+        if let Some(c) = s.check.as_ref().filter(|c| !c.is_clean()) {
+            let name = s.path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+            notes.push(trf!(
+                "{name}: {} beschädigte Tonstellen, {} Zeitsprünge",
+                "{name}: {} damaged audio spots, {} time jumps",
+                c.audio_breaks.len(),
+                c.time_jumps.len()
+            ));
+        }
+        if let Some(e) = &s.extra_error {
+            notes.push(e.clone());
+        }
+    }
+    let check = if !checked.is_empty() && checked.iter().all(|c| c.is_clean()) {
+        Some(CheckReport { audio_breaks: Vec::new(), time_jumps: Vec::new(), seconds: checked.iter().map(|c| c.seconds).sum(), tracks: checked[0].tracks })
+    } else {
+        None
+    };
+    Ok(BackupSummary {
+        path: dir,
+        sectors: all.iter().map(|s| s.sectors).sum(),
+        target_sectors: reqs.first().map(|r| r.plan.target_sectors).unwrap_or(0),
+        source_sectors: all.iter().map(|s| s.source_sectors).sum(),
+        seconds: started.elapsed().as_secs_f64(),
+        fits: all.iter().all(|s| s.fits),
+        burn_started: false,
+        check,
+        sheet: None,
+        extra_error: (!notes.is_empty()).then(|| notes.join("\n")),
+        files: all.len(),
+    })
+}
+
+/// Einstieg für den Arbeits-Thread bei mehreren Ausgaben (Einzeldateien).
+pub fn run_many(reqs: Vec<BackupRequest>, tx: Sender<BackupMsg>, cancel: Arc<AtomicBool>) {
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_many_inner(reqs, &tx, &cancel)));
+    let msg = match res {
+        Ok(Ok(s)) => BackupMsg::Done(s),
+        Ok(Err(e)) if e == CANCELLED => BackupMsg::Cancelled,
+        Ok(Err(e)) => BackupMsg::Failed(e),
+        Err(_) => BackupMsg::Failed(tr!("Beim Umwandeln ist ein interner Fehler aufgetreten.", "An internal error occurred during conversion.").into()),
+    };
+    let _ = tx.send(msg);
 }
 
 /// Einstieg für den Arbeits-Thread.

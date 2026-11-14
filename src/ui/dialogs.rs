@@ -101,8 +101,30 @@ impl App {
             (Mode::FullDisc, Some(d)) => d.titles.iter().map(|t| t.category == Category::MainMovie).collect(),
             (Mode::FullDisc, None) => Vec::new(),
         };
+        // Namen der Titel: eigener Name des Eintrags oder die übliche Bezeichnung
+        let names: Vec<String> = match self.disc.as_ref() {
+            Some(d) => {
+                let rows = vob_rows(d, &self.plan);
+                match self.plan.mode {
+                    Mode::Reauthor => rows
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, r)| self.plan.reauthor.get(i).and_then(|e| e.name.clone()).filter(|n| !n.trim().is_empty()).unwrap_or(r))
+                        .collect(),
+                    Mode::FullDisc => rows,
+                }
+            }
+            None => Vec::new(),
+        };
+        // „Brennen“ ist jetzt eine Option des ISO-Abbilds
+        let burn = self.prefs.backup_kind == OutputKind::Burn;
+        let kind = if burn { OutputKind::Iso } else { self.prefs.backup_kind };
         self.backup_dlg = Some(BackupDialog {
-            kind: self.prefs.backup_kind,
+            kind,
+            burn,
+            separate: false,
+            separate_dir: file_base.display().to_string(),
+            names,
             folder: folder_base.join(&label).display().to_string(),
             iso: file_base.join(format!("{label}.iso")).display().to_string(),
             vob: file_base.join(format!("{label}.vob")).display().to_string(),
@@ -223,12 +245,20 @@ impl App {
                 (OutputKind::Vob, tr!("VOB-Datei", "VOB file")),
                 (OutputKind::Mpeg, "MPEG-2"),
                 (OutputKind::Mkv, "MKV"),
-                (OutputKind::Burn, tr!("Brennen", "Burn")),
             ];
             segmented(ui, &p, &mut dlg.kind, &opts, width);
             ui.add_space(6.0);
+            let file_kind = matches!(dlg.kind, OutputKind::Vob | OutputKind::Mpeg | OutputKind::Mkv);
+            let rows = vob_rows(&disc, &self.plan);
+            // Einzeldateien nur, wenn es mehr als einen Titel gibt
+            if rows.len() < 2 {
+                dlg.separate = false;
+            }
+            let separate = file_kind && dlg.separate;
             let hint = match dlg.kind {
+                OutputKind::Iso if dlg.burn => tr!("Legt ein ISO-Abbild an und öffnet danach den Windows-Brenner.", "Creates an ISO image and then opens the Windows disc burner."),
                 OutputKind::Iso => tr!("Eine einzige Datei, die du später brennen oder einbinden kannst.", "A single file you can burn or mount later."),
+                _ if separate => tr!("Schreibt jeden gewählten Titel in eine eigene Datei. Der Name in der Liste unten wird zum Dateinamen.", "Writes each chosen title to its own file. The name in the list below becomes the file name."),
                 OutputKind::Folder => tr!("Legt die Ordner VIDEO_TS und AUDIO_TS an.", "Creates the VIDEO_TS and AUDIO_TS folders."),
                 OutputKind::Burn => tr!("Legt ein ISO-Abbild an und öffnet danach den Windows-Brenner.", "Creates an ISO image and then opens the Windows disc burner."),
                 OutputKind::Vob => tr!("Schreibt die gewählten Titel nacheinander in eine einzige VOB-Datei, ohne DVD-Struktur und Menüs.", "Writes the chosen titles one after another into a single VOB file, without DVD structure and menus."),
@@ -239,11 +269,13 @@ impl App {
             ui.add_space(4.0);
 
             ui.horizontal(|ui| {
-                let is_folder = dlg.kind == OutputKind::Folder;
+                // Einzeldateien: hier wird nur der Zielordner gewählt
+                let is_folder = dlg.kind == OutputKind::Folder || separate;
                 let is_vob = dlg.kind == OutputKind::Vob;
                 let is_mpeg = dlg.kind == OutputKind::Mpeg;
                 let is_mkv = dlg.kind == OutputKind::Mkv;
                 let value = match dlg.kind {
+                    _ if separate => &mut dlg.separate_dir,
                     OutputKind::Folder => &mut dlg.folder,
                     OutputKind::Vob => &mut dlg.vob,
                     OutputKind::Mpeg => &mut dlg.mpg,
@@ -256,9 +288,10 @@ impl App {
                 ui.add(edit);
                 if soft_button(ui, &p, &trf!("{}  Wählen", "{}  Choose", ic::FOLDER_OPEN)).clicked() {
                     if is_folder {
-                        // Im Ordner über dem bisherigen Ziel beginnen
+                        // Im Ordner über dem bisherigen Ziel beginnen (Einzeldateien: im Ziel selbst)
                         let cur = PathBuf::from(value.as_str());
-                        let dir = cur.parent().filter(|x| x.is_dir()).map(Path::to_path_buf).unwrap_or_else(|| start_dir.clone());
+                        let dir = if separate && cur.is_dir() { Some(cur.clone()) } else { cur.parent().filter(|x| x.is_dir()).map(Path::to_path_buf) };
+                        let dir = dir.unwrap_or_else(|| start_dir.clone());
                         if let Some(f) = rfd::FileDialog::new().set_title(tr!("Zielordner wählen", "Choose target folder")).set_directory(dir).pick_folder() {
                             *value = f.display().to_string();
                         }
@@ -284,20 +317,50 @@ impl App {
                 }
             });
 
-            if matches!(dlg.kind, OutputKind::Vob | OutputKind::Mpeg | OutputKind::Mkv) {
+            if file_kind {
                 ui.add_space(8.0);
-                ui.label(RichText::new(tr!("Titel für die Datei", "Titles for the file")).family(semibold()).size(13.0).color(p.muted));
-                egui::ScrollArea::vertical().id_salt("vob-titel").max_height(132.0).show(ui, |ui| {
+                if rows.len() >= 2 {
+                    style::check(ui, &p, &mut dlg.separate, tr!("Jeden Titel als eigene Datei speichern", "Save each title as a separate file"));
+                    ui.add_space(4.0);
+                }
+                let head = if separate { tr!("Titel und Dateinamen", "Titles and file names") } else { tr!("Titel für die Datei", "Titles for the file") };
+                ui.label(RichText::new(head).family(semibold()).size(13.0).color(p.muted));
+                egui::ScrollArea::vertical().id_salt("vob-titel").max_height(170.0).show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
-                    let rows = vob_rows(&disc, &self.plan);
                     dlg.vob_sel.resize(rows.len(), false);
-                    for (on, text) in dlg.vob_sel.iter_mut().zip(rows.iter()) {
-                        style::check(ui, &p, on, text);
+                    dlg.names.resize(rows.len(), String::new());
+                    for (i, default) in rows.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            style::check(ui, &p, &mut dlg.vob_sel[i], "");
+                            // Der Name lässt sich ändern; beim Neu-Zusammenstellen bleibt er am Eintrag.
+                            let edit = egui::TextEdit::singleline(&mut dlg.names[i]).desired_width(ui.available_width() - 4.0).hint_text(default.as_str());
+                            if ui.add(edit).on_hover_text(tr!("Name des Titels, zugleich Dateiname beim Export als Einzeldateien", "Name of the title, also the file name when exporting separate files")).changed()
+                                && self.plan.mode == Mode::Reauthor
+                            {
+                                if let Some(e) = self.plan.reauthor.get_mut(i) {
+                                    let n = dlg.names[i].trim();
+                                    e.name = (!n.is_empty() && n != default).then(|| n.to_string());
+                                }
+                            }
+                        });
                     }
                     if rows.is_empty() {
                         ui.label(RichText::new(tr!("Die Liste „Neue DVD“ ist noch leer.", "The \"New DVD\" list is still empty.")).size(13.0).color(p.muted));
                     }
                 });
+                if separate {
+                    let ext = file_ext(dlg.kind);
+                    let files = separate_names(&dlg.names, &rows, &dlg.vob_sel);
+                    let mut shown: Vec<String> = files.iter().take(3).map(|(_, n)| format!("{n}.{ext}")).collect();
+                    if files.len() > 3 {
+                        shown.push("…".into());
+                    }
+                    ui.label(
+                        RichText::new(trf!("{}  {} Dateien: {}", "{}  {} files: {}", ic::FILES, files.len(), shown.join(", ")))
+                            .size(12.5)
+                            .color(p.faint),
+                    );
+                }
             }
 
             ui.add_space(8.0);
@@ -331,6 +394,9 @@ impl App {
                     style::check(ui, &p, &mut dlg.vob_keep_target, tr!("Automatik hält auch hier die Zielgröße ein", "Automatic mode keeps the target size here too"));
                 }
                 _ => {
+                    if dlg.kind == OutputKind::Iso {
+                        style::check(ui, &p, &mut dlg.burn, tr!("Danach brennen (öffnet den Windows-Brenner)", "Burn afterwards (opens the Windows disc burner)"));
+                    }
                     style::check(ui, &p, &mut self.plan.remove_puo, tr!("Sperren für Vorspulen und Menütasten aufheben", "Remove fast-forward and menu button locks"));
                     if self.plan.mode == Mode::FullDisc {
                         style::check(ui, &p, &mut self.plan.region_free, tr!("Ländercode der DVD entfernen", "Remove the DVD's region code"));
@@ -372,6 +438,7 @@ impl App {
             let need_txt = fmt_size(est.total);
             ui.label(RichText::new(trf!("Voraussichtliche Größe: {need_txt}", "Estimated size: {need_txt}")).size(14.0));
             let target_path = PathBuf::from(match dlg.kind {
+                _ if separate => &dlg.separate_dir,
                 OutputKind::Folder => &dlg.folder,
                 OutputKind::Vob => &dlg.vob,
                 OutputKind::Mpeg => &dlg.mpg,
@@ -380,7 +447,7 @@ impl App {
             });
             // ISO entsteht über einen Arbeitsordner und braucht vorübergehend doppelt so viel Platz.
             let is_file = dlg.kind != OutputKind::Folder;
-            let required = if matches!(dlg.kind, OutputKind::Iso | OutputKind::Burn) { needed * 2 } else { needed };
+            let required = if dlg.kind == OutputKind::Iso { needed * 2 } else { needed };
             let mut blocked = false;
             if let Some(free) = free_space(&target_path) {
                 if free < required {
@@ -400,8 +467,7 @@ impl App {
                 ui.label(RichText::new(trf!("{}  Das Ergebnis wird größer als das Ziel.", "{}  The result will be larger than the target.", ic::WARNING)).color(p.warn));
             }
             let _ = is_file;
-            let path_ok = !target_path.as_os_str().is_empty()
-                && (!matches!(dlg.kind, OutputKind::Vob | OutputKind::Mpeg | OutputKind::Mkv) || dlg.vob_sel.iter().any(|on| *on));
+            let path_ok = !target_path.as_os_str().is_empty() && (!file_kind || dlg.vob_sel.iter().any(|on| *on));
 
             ui.add_space(10.0);
             ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
@@ -434,7 +500,8 @@ impl App {
         }
         if start {
             // Vor dem Start nachsehen, ob gleichnamige Dateien schon da sind.
-            let found = self.backup_dlg.as_ref().map(existing_files).unwrap_or_default();
+            let rows = vob_rows(&disc, &self.plan);
+            let found = self.backup_dlg.as_ref().map(|d| existing_files(d, &rows)).unwrap_or_default();
             if found.is_empty() {
                 self.start_job(ctx);
             } else if let Some(d) = self.backup_dlg.as_mut() {
@@ -493,20 +560,22 @@ impl App {
     pub(super) fn start_job(&mut self, ctx: &egui::Context) {
         let Some(dlg) = self.backup_dlg.take() else { return };
         let Some(disc) = self.disc.clone() else { return };
-        let (output, plan) = self.request_from_dialog(&dlg, &disc);
+        let mut reqs: Vec<BackupRequest> = self
+            .requests_from_dialog(&dlg, &disc)
+            .into_iter()
+            .map(|(output, plan)| BackupRequest { disc: disc.clone(), plan, output, deep_analysis: dlg.deep })
+            .collect();
         self.preview.pause();
         let (tx, rx) = channel();
         let cancel = Arc::new(AtomicBool::new(false));
-        let req = BackupRequest {
-            disc,
-            plan,
-            output,
-            deep_analysis: dlg.deep,
-        };
         let cancel2 = cancel.clone();
         let ctx2 = ctx.clone();
         std::thread::spawn(move || {
-            backup::run(req, tx, cancel2);
+            if reqs.len() == 1 {
+                backup::run(reqs.remove(0), tx, cancel2);
+            } else {
+                backup::run_many(reqs, tx, cancel2);
+            }
             ctx2.request_repaint();
         });
         self.job = Some(Job {
@@ -525,23 +594,58 @@ impl App {
     fn enqueue_from_dialog(&mut self) {
         let Some(dlg) = self.backup_dlg.take() else { return };
         let Some(disc) = self.disc.clone() else { return };
-        let (output, plan) = self.request_from_dialog(&dlg, &disc);
-        let item = BatchItem::new(
-            disc.source.origin.clone(),
-            disc.source.label.clone(),
-            PlanSource::Fixed { plan: Box::new(plan), fingerprint: Fingerprint::of(&disc) },
-            output,
-            dlg.deep,
-        );
-        self.queue.push(item);
+        // Einzeldateien: je Datei ein Eintrag in der Warteschlange
+        for (output, plan) in self.requests_from_dialog(&dlg, &disc) {
+            let item = BatchItem::new(
+                disc.source.origin.clone(),
+                disc.source.label.clone(),
+                PlanSource::Fixed { plan: Box::new(plan), fingerprint: Fingerprint::of(&disc) },
+                output,
+                dlg.deep,
+            );
+            self.queue.push(item);
+        }
         let n = self.queue.items().len();
         self.notice = Some((trf!("In die Warteschlange gestellt ({})", "Added to the queue ({})", discslim::i18n::count(n, "Eintrag", "Einträge", "entry", "entries")), Instant::now()));
+    }
+
+    /// Ziele und Pläne zum Export-Dialog: eines, oder beim Export als Einzeldateien je
+    /// gewähltem Titel eines. Merkt sich die Optionen fürs nächste Mal.
+    fn requests_from_dialog(&mut self, dlg: &BackupDialog, disc: &Disc) -> Vec<(Output, Plan)> {
+        let file_kind = matches!(dlg.kind, OutputKind::Vob | OutputKind::Mpeg | OutputKind::Mkv);
+        if !(file_kind && dlg.separate) {
+            return vec![self.request_from_dialog(dlg, disc)];
+        }
+        self.prefs.backup_kind = dlg.kind;
+        self.prefs.vob_keep_target = dlg.vob_keep_target;
+        self.prefs.file_dir = dlg.separate_dir.clone();
+        self.note_save_dir(Path::new(&dlg.separate_dir));
+        let rows = vob_rows(disc, &self.plan);
+        let dir = PathBuf::from(&dlg.separate_dir);
+        let ext = file_ext(dlg.kind);
+        separate_names(&dlg.names, &rows, &dlg.vob_sel)
+            .into_iter()
+            .map(|(i, name)| {
+                let only: Vec<bool> = (0..rows.len()).map(|k| k == i).collect();
+                let path = dir.join(format!("{name}.{ext}"));
+                let output = match dlg.kind {
+                    OutputKind::Vob => Output::Vob(path),
+                    OutputKind::Mpeg => Output::Mpeg { path, audio: dlg.mpeg_audio },
+                    _ => Output::Mkv { path, audio: dlg.mpeg_audio },
+                };
+                let mut plan = self.plan.for_single_file(disc, &only, dlg.vob_keep_target);
+                plan.declick = self.prefs.declick;
+                plan.verify = self.prefs.verify;
+                plan.sheet_secs = self.prefs.sheet.then_some(self.prefs.sheet_secs.max(1));
+                (output, plan)
+            })
+            .collect()
     }
 
     /// Ziel und Plan zum Backup-Dialog; merkt sich die Optionen fürs nächste Mal.
     fn request_from_dialog(&mut self, dlg: &BackupDialog, disc: &Disc) -> (Output, Plan) {
         // Ziel und Optionen fürs nächste Mal merken
-        self.prefs.backup_kind = dlg.kind;
+        self.prefs.backup_kind = if dlg.kind == OutputKind::Iso && dlg.burn { OutputKind::Burn } else { dlg.kind };
         self.prefs.no_split = dlg.no_split;
         self.prefs.vob_keep_target = dlg.vob_keep_target;
         self.prefs.remove_puo = self.plan.remove_puo;
@@ -572,6 +676,7 @@ impl App {
         self.note_save_dir(Path::new(&dir));
         let output = match dlg.kind {
             OutputKind::Folder => Output::Folder(PathBuf::from(&dlg.folder)),
+            OutputKind::Iso if dlg.burn => Output::Burn(with_iso_ext(&dlg.iso)),
             OutputKind::Iso => Output::Iso(with_iso_ext(&dlg.iso)),
             OutputKind::Burn => Output::Burn(with_iso_ext(&dlg.iso)),
             OutputKind::Vob => Output::Vob(with_ext(&dlg.vob, "vob")),
@@ -583,7 +688,7 @@ impl App {
         } else {
             let mut plan = self.plan.clone();
             // Eine gebrannte DVD muss immer die übliche Teilung haben.
-            plan.split_vob = !dlg.no_split || dlg.kind == OutputKind::Burn;
+            plan.split_vob = !dlg.no_split || (dlg.kind == OutputKind::Iso && dlg.burn);
             plan
         };
         let mut plan = plan;
@@ -661,7 +766,12 @@ impl App {
                     ))
                     .size(14.0),
                 );
-                ui.label(RichText::new(s.path.display().to_string()).size(13.0).color(p.muted));
+                let where_ = if s.files > 1 {
+                    trf!("{} Dateien in {}", "{} files in {}", s.files, s.path.display())
+                } else {
+                    s.path.display().to_string()
+                };
+                ui.label(RichText::new(where_).size(13.0).color(p.muted));
                 if !s.fits {
                     ui.label(
                         RichText::new(trf!(
@@ -807,6 +917,19 @@ impl App {
             ui.add_space(6.0);
             ui.label(RichText::new(tr!("Vorschau", "Preview")).family(semibold()).size(13.0).color(p.muted));
             style::check(ui, &p, &mut self.prefs.autoplay, tr!("Titel bei Klicken automatisch abspielen", "Play titles automatically when clicked"));
+            style::check(ui, &p, &mut self.prefs.thumb_anim, tr!("Vorschaubilder der Einträge dauerhaft abspielen", "Play the entry thumbnails continuously"));
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(tr!("Länge der Schleife", "Loop length")).color(p.muted));
+                ui.add(egui::DragValue::new(&mut self.prefs.thumb_loop_secs).range(1..=60).speed(0.2).suffix(tr!(" s", " s")));
+            });
+            ui.label(
+                RichText::new(tr!(
+                    "Die kleinen Bilder für Anfang und Ende laufen dann ohne Maus als Schleife. Bei einer DVD im Laufwerk nur beim Überfahren mit der Maus, damit das Laufwerk nicht ständig springt.",
+                    "The small start and end pictures then loop without the mouse. With a DVD in the drive only on mouse-over, so the drive does not keep seeking."
+                ))
+                .size(12.5)
+                .color(p.faint),
+            );
 
             ui.add_space(6.0);
             ui.label(RichText::new(tr!("Ton- und Untertitelsprache", "Audio and subtitle language")).family(semibold()).size(13.0).color(p.muted));
@@ -970,8 +1093,48 @@ pub(super) fn sanitize(label: &str) -> String {
     format!("{}_converted", file_stem(label))
 }
 
+/// Dateiendung der Datei-Ausgaben.
+fn file_ext(kind: OutputKind) -> &'static str {
+    match kind {
+        OutputKind::Mpeg => "mpg",
+        OutputKind::Mkv => "mkv",
+        _ => "vob",
+    }
+}
+
+/// Dateinamen (ohne Endung) für den Export als Einzeldateien: je gewähltem Titel sein
+/// Name (leer: die übliche Bezeichnung), unzulässige Zeichen ersetzt, doppelte durchnummeriert.
+fn separate_names(names: &[String], rows: &[String], sel: &[bool]) -> Vec<(usize, String)> {
+    let mut out: Vec<(usize, String)> = Vec::new();
+    for (i, row) in rows.iter().enumerate() {
+        if !sel.get(i).copied().unwrap_or(false) {
+            continue;
+        }
+        let name = names.get(i).map(|n| n.trim()).filter(|n| !n.is_empty()).unwrap_or(row);
+        let base = file_stem(name);
+        let mut cand = base.clone();
+        let mut k = 2;
+        while out.iter().any(|(_, n)| n.eq_ignore_ascii_case(&cand)) {
+            cand = format!("{base} ({k})");
+            k += 1;
+        }
+        out.push((i, cand));
+    }
+    out
+}
+
 /// Dateien, die das Backup am gewählten Ziel ersetzen würde.
-fn existing_files(d: &BackupDialog) -> Vec<String> {
+fn existing_files(d: &BackupDialog, rows: &[String]) -> Vec<String> {
+    if d.separate && matches!(d.kind, OutputKind::Vob | OutputKind::Mpeg | OutputKind::Mkv) {
+        let dir = PathBuf::from(&d.separate_dir);
+        let ext = file_ext(d.kind);
+        return separate_names(&d.names, rows, &d.vob_sel)
+            .into_iter()
+            .map(|(_, n)| dir.join(format!("{n}.{ext}")))
+            .filter(|p| p.exists())
+            .map(|p| p.display().to_string())
+            .collect();
+    }
     match d.kind {
         OutputKind::Folder => {
             let dir = PathBuf::from(&d.folder).join("VIDEO_TS");

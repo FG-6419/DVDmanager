@@ -255,6 +255,33 @@ impl SpaceReader {
     }
 }
 
+/// Liegt der Pfad auf einem optischen Laufwerk (eingelegte DVD)?
+pub fn is_optical(path: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetDriveTypeW(path: *const u16) -> u32;
+        }
+        const DRIVE_CDROM: u32 = 5;
+        let text = path.display().to_string();
+        let text = text.strip_prefix(r"\\?\").unwrap_or(&text);
+        let mut chars = text.chars();
+        let (Some(letter), Some(':')) = (chars.next(), chars.next()) else { return false };
+        if !letter.is_ascii_alphabetic() {
+            return false;
+        }
+        let root = format!("{letter}:\\");
+        let wide: Vec<u16> = root.encode_utf16().chain(std::iter::once(0)).collect();
+        unsafe { GetDriveTypeW(wide.as_ptr()) == DRIVE_CDROM }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        false
+    }
+}
+
 /// Windows-Laufwerke, in denen gerade eine Video-DVD liegt.
 pub fn optical_drives_with_video() -> Vec<(String, PathBuf, bool)> {
     let mut out = Vec::new();
