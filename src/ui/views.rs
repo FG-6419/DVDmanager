@@ -650,7 +650,12 @@ impl App {
         group_label(ui, &p, heading);
         ScrollArea::vertical().id_salt("quelle").auto_shrink([false, false]).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
-            for (idx, t) in disc.titles.iter().enumerate() {
+            // In der Reihenfolge der DVD (Titelnummer). Intern steht der Hauptfilm vorn; daran
+            // hängen gespeicherte Projekte, deshalb wird nur die Anzeige umsortiert.
+            let mut order: Vec<usize> = (0..disc.titles.len()).collect();
+            order.sort_by_key(|i| disc.titles[*i].number);
+            for idx in order {
+                let t = &disc.titles[idx];
                 let sub = format!("{} · {}", fmt_time(t.ms), discslim::i18n::chapters(t.chapters.len()));
                 let stats = disc.title_stats(t);
                 let mut add = false;

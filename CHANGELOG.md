@@ -2,6 +2,10 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.034 · 2026-11-14 18:32
+
+- „Titel dieser DVD“ steht jetzt in der Reihenfolge der DVD (Titel 1, 2, 3 …). Bisher stand der längste Titel als vermeintlicher Hauptfilm ganz oben, was bei DVDs mit mehreren gleich langen Teilen wie eine falsche Reihenfolge aussah. Intern bleibt die Reihenfolge gleich, gespeicherte Projekte passen also weiter.
+
 ## 1.0.033 · 2026-11-14 18:11
 
 - Export als Datei: Ohne „Jeden Titel als eigene Datei speichern“ zeigt die Liste nur noch Häkchen mit dem Titelnamen als Text, ohne Namensfelder. Die Namen werden nur für Einzeldateien gebraucht; mit der Option erscheinen die Felder wie bisher.
