@@ -2,6 +2,10 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.024 · 2026-11-14 11:17
+
+- Dateiendung für MPEG-2: Neben .mpg und .MPG stehen jetzt auch .mpeg und .MPEG zur Wahl (Einstellungen → Export). Eine eingetippte .mpg- oder .mpeg-Endung wird passend ersetzt, statt eine zweite anzuhängen.
+
 ## 1.0.023 · 2026-11-14 11:08
 
 - Neue Einstellung „Dateiendung beim Export“ (Einstellungen → Export): Für VOB, MPEG-2 und MKV getrennt wählbar, ob die Endung klein (.vob, .mpg, .mkv) oder groß (.VOB, .MPG, .MKV) geschrieben wird. Gilt für einzelne Dateien und für den Export als Einzeldateien; eine eingetippte Endung wird entsprechend angepasst.

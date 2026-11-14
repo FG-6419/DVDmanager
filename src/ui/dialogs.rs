@@ -18,7 +18,7 @@ use discslim::engine::plan::{fmt_size, Mode, Plan};
 use discslim::engine::project::Fingerprint;
 
 use super::style::{self, primary_button, segmented, semibold, soft_button};
-use super::{App, BackupDialog, Job, JobResult, OutputKind};
+use super::{App, BackupDialog, ExtStyle, Job, JobResult, OutputKind};
 
 /// Modales Fenster mit abgedunkeltem Hintergrund.
 pub(super) fn modal(ctx: &egui::Context, p: &style::Pal, id: &str, width: f32, add: impl FnOnce(&mut Ui)) {
@@ -127,10 +127,10 @@ impl App {
             names,
             folder: folder_base.join(&label).display().to_string(),
             iso: file_base.join(format!("{label}.iso")).display().to_string(),
-            vob: file_base.join(format!("{label}.{}", file_ext(OutputKind::Vob, &self.prefs.ext_upper))).display().to_string(),
-            mpg: file_base.join(format!("{label}.{}", file_ext(OutputKind::Mpeg, &self.prefs.ext_upper))).display().to_string(),
-            mkv: file_base.join(format!("{label}.{}", file_ext(OutputKind::Mkv, &self.prefs.ext_upper))).display().to_string(),
-            upper: self.prefs.ext_upper,
+            vob: file_base.join(format!("{label}.{}", file_ext(OutputKind::Vob, &self.prefs.ext))).display().to_string(),
+            mpg: file_base.join(format!("{label}.{}", file_ext(OutputKind::Mpeg, &self.prefs.ext))).display().to_string(),
+            mkv: file_base.join(format!("{label}.{}", file_ext(OutputKind::Mkv, &self.prefs.ext))).display().to_string(),
+            ext: self.prefs.ext,
             mpeg_audio: None,
             no_split: self.prefs.no_split,
             vob_sel,
@@ -350,7 +350,7 @@ impl App {
                     }
                 });
                 if separate {
-                    let ext = file_ext(dlg.kind, &dlg.upper);
+                    let ext = file_ext(dlg.kind, &dlg.ext);
                     let files = separate_names(&dlg.names, &rows, &dlg.vob_sel);
                     let mut shown: Vec<String> = files.iter().take(3).map(|(_, n)| format!("{n}.{ext}")).collect();
                     if files.len() > 3 {
@@ -623,7 +623,7 @@ impl App {
         self.note_save_dir(Path::new(&dlg.separate_dir));
         let rows = vob_rows(disc, &self.plan);
         let dir = PathBuf::from(&dlg.separate_dir);
-        let ext = file_ext(dlg.kind, &dlg.upper);
+        let ext = file_ext(dlg.kind, &dlg.ext);
         separate_names(&dlg.names, &rows, &dlg.vob_sel)
             .into_iter()
             .map(|(i, name)| {
@@ -680,9 +680,9 @@ impl App {
             OutputKind::Iso if dlg.burn => Output::Burn(with_iso_ext(&dlg.iso)),
             OutputKind::Iso => Output::Iso(with_iso_ext(&dlg.iso)),
             OutputKind::Burn => Output::Burn(with_iso_ext(&dlg.iso)),
-            OutputKind::Vob => Output::Vob(with_ext_case(&dlg.vob, &file_ext(dlg.kind, &dlg.upper))),
-            OutputKind::Mpeg => Output::Mpeg { path: with_ext_case(&dlg.mpg, &file_ext(dlg.kind, &dlg.upper)), audio: dlg.mpeg_audio },
-            OutputKind::Mkv => Output::Mkv { path: with_ext_case(&dlg.mkv, &file_ext(dlg.kind, &dlg.upper)), audio: dlg.mpeg_audio },
+            OutputKind::Vob => Output::Vob(with_ext_case(&dlg.vob, &file_ext(dlg.kind, &dlg.ext))),
+            OutputKind::Mpeg => Output::Mpeg { path: with_ext_case(&dlg.mpg, &file_ext(dlg.kind, &dlg.ext)), audio: dlg.mpeg_audio },
+            OutputKind::Mkv => Output::Mkv { path: with_ext_case(&dlg.mkv, &file_ext(dlg.kind, &dlg.ext)), audio: dlg.mpeg_audio },
         };
         let plan = if matches!(dlg.kind, OutputKind::Vob | OutputKind::Mpeg | OutputKind::Mkv) {
             self.plan.for_single_file(disc, &dlg.vob_sel, dlg.vob_keep_target)
@@ -995,10 +995,20 @@ impl App {
             for (i, (name, ext)) in [(tr!("VOB-Datei", "VOB file"), "vob"), ("MPEG-2", "mpg"), ("MKV", "mkv")].into_iter().enumerate() {
                 ui.horizontal(|ui| {
                     ui.add_sized([110.0, 28.0], egui::Label::new(RichText::new(name).color(p.text)));
-                    let lower = format!(".{ext}");
-                    let upper = format!(".{}", ext.to_ascii_uppercase());
-                    let opts = [(false, lower.as_str()), (true, upper.as_str())];
-                    segmented(ui, &p, &mut self.prefs.ext_upper[i], &opts, 180.0);
+                    if i == 1 {
+                        // MPEG-2: .mpg oder .mpeg, jeweils klein oder groß (Wert: lang, groß)
+                        let mut v = (self.prefs.ext.mpeg_long, self.prefs.ext.upper[1]);
+                        let opts = [((false, false), ".mpg"), ((false, true), ".MPG"), ((true, false), ".mpeg"), ((true, true), ".MPEG")];
+                        if segmented(ui, &p, &mut v, &opts, 360.0) {
+                            self.prefs.ext.mpeg_long = v.0;
+                            self.prefs.ext.upper[1] = v.1;
+                        }
+                    } else {
+                        let lower = format!(".{ext}");
+                        let upper = format!(".{}", ext.to_ascii_uppercase());
+                        let opts = [(false, lower.as_str()), (true, upper.as_str())];
+                        segmented(ui, &p, &mut self.prefs.ext.upper[i], &opts, 180.0);
+                    }
                 });
             }
 
@@ -1105,13 +1115,14 @@ pub(super) fn sanitize(label: &str) -> String {
     format!("{}_converted", file_stem(label))
 }
 
-/// Dateiendung der Datei-Ausgaben, groß oder klein nach den Einstellungen
-/// (`upper`: VOB, MPEG, MKV).
-fn file_ext(kind: OutputKind, upper: &[bool; 3]) -> String {
+/// Dateiendung der Datei-Ausgaben nach den Einstellungen: groß oder klein, bei MPEG-2
+/// außerdem .mpg oder .mpeg.
+fn file_ext(kind: OutputKind, style: &ExtStyle) -> String {
     let (ext, up) = match kind {
-        OutputKind::Mpeg => ("mpg", upper[1]),
-        OutputKind::Mkv => ("mkv", upper[2]),
-        _ => ("vob", upper[0]),
+        OutputKind::Mpeg if style.mpeg_long => ("mpeg", style.upper[1]),
+        OutputKind::Mpeg => ("mpg", style.upper[1]),
+        OutputKind::Mkv => ("mkv", style.upper[2]),
+        _ => ("vob", style.upper[0]),
     };
     if up { ext.to_ascii_uppercase() } else { ext.to_string() }
 }
@@ -1141,7 +1152,7 @@ fn separate_names(names: &[String], rows: &[String], sel: &[bool]) -> Vec<(usize
 fn existing_files(d: &BackupDialog, rows: &[String]) -> Vec<String> {
     if d.separate && matches!(d.kind, OutputKind::Vob | OutputKind::Mpeg | OutputKind::Mkv) {
         let dir = PathBuf::from(&d.separate_dir);
-        let ext = file_ext(d.kind, &d.upper);
+        let ext = file_ext(d.kind, &d.ext);
         return separate_names(&d.names, rows, &d.vob_sel)
             .into_iter()
             .map(|(_, n)| dir.join(format!("{n}.{ext}")))
@@ -1169,15 +1180,15 @@ fn existing_files(d: &BackupDialog, rows: &[String]) -> Vec<String> {
             out
         }
         OutputKind::Mpeg => {
-            let p = with_ext_case(&d.mpg, &file_ext(d.kind, &d.upper));
+            let p = with_ext_case(&d.mpg, &file_ext(d.kind, &d.ext));
             if p.exists() { vec![p.display().to_string()] } else { Vec::new() }
         }
         OutputKind::Mkv => {
-            let p = with_ext_case(&d.mkv, &file_ext(d.kind, &d.upper));
+            let p = with_ext_case(&d.mkv, &file_ext(d.kind, &d.ext));
             if p.exists() { vec![p.display().to_string()] } else { Vec::new() }
         }
         OutputKind::Vob => {
-            let p = with_ext_case(&d.vob, &file_ext(d.kind, &d.upper));
+            let p = with_ext_case(&d.vob, &file_ext(d.kind, &d.ext));
             if p.exists() { vec![p.display().to_string()] } else { Vec::new() }
         }
         OutputKind::Iso | OutputKind::Burn => {
@@ -1236,9 +1247,15 @@ pub(super) fn with_ext(s: &str, ext: &str) -> PathBuf {
 }
 
 /// Wie `with_ext`, aber die Endung steht danach genau so da wie gewünscht (groß/klein).
+/// Steht schon eine der Video-Endungen da (auch .mpg statt .mpeg), wird sie ersetzt.
 fn with_ext_case(s: &str, ext: &str) -> PathBuf {
-    let p = with_ext(s, ext);
-    if p.extension().is_some_and(|e| e.to_string_lossy() != ext) { p.with_extension(ext) } else { p }
+    let p = PathBuf::from(s);
+    let known = p.extension().is_some_and(|e| {
+        let e = e.to_string_lossy().to_ascii_lowercase();
+        let want = ext.to_ascii_lowercase();
+        e == want || (matches!(e.as_str(), "mpg" | "mpeg") && matches!(want.as_str(), "mpg" | "mpeg"))
+    });
+    if known { p.with_extension(ext) } else { PathBuf::from(format!("{s}.{ext}")) }
 }
 
 /// Zeilen für die Titelauswahl der VOB-Ausgabe.
