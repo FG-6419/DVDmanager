@@ -2,6 +2,12 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.037 · 2026-11-15 11:58
+
+- Lange Titelnamen werden in der Liste „Neue DVD“ und in der Titelliste des Exports sauber mit „…“ gekürzt statt mitten im Buchstaben abgeschnitten. Der volle Name erscheint, wenn die Maus über der Zeile steht.
+- Export als VOB, MPEG-2 oder MKV mit nur einem Titel: Auch hier gibt es jetzt die Option „Titel einzeln speichern, Dateiname aus der Liste“. Mit Häkchen wird der Name aus der Titelliste zum Dateinamen, ohne Häkchen gilt wie bisher der Dateiname im Pfad oben.
+- „1 Datei“ statt „1 Dateien“ in der Dateiübersicht des Exports.
+
 ## 1.0.036 · 2026-11-15 11:37
 
 - Einträge der Liste „Neue DVD“ lassen sich umbenennen: Doppelklick auf den Eintrag, F2 oder „Umbenennen“ im Kontextmenü. Enter oder ein Klick daneben übernimmt den Namen, Esc bricht ab, ein leeres Feld stellt „Titel …“ wieder her. Der Name gilt auch beim Export (Titelliste und Dateinamen der Einzeldateien).

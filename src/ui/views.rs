@@ -831,19 +831,18 @@ impl App {
         }
 
         let tx = rect.left() + 8.0 + 2.0 * (tw + 4.0) + 6.0;
-        let right_w = 76.0;
-        let text_w = (rect.right() - tx - right_w - 8.0).max(30.0);
-        let clip = Rect::from_min_size(egui::pos2(tx, rect.top()), Vec2::new(text_w, rect.height()));
-        let tp = ui.painter_at(clip);
-        tp.text(egui::pos2(tx, rect.center().y - 10.0), Align2::LEFT_CENTER, title, FontId::new(14.0, semibold()), p.text);
-        tp.text(egui::pos2(tx, rect.center().y + 10.0), Align2::LEFT_CENTER, subtitle, FontId::proportional(12.0), p.muted);
         let rx = rect.right() - 10.0;
-        painter.text(egui::pos2(rx, rect.center().y - 10.0), Align2::RIGHT_CENTER, right_top, FontId::new(13.0, semibold()), p.text);
-        painter.text(egui::pos2(rx, rect.center().y + 10.0), Align2::RIGHT_CENTER, right_bottom, FontId::proportional(12.0), p.muted);
+        let r1 = painter.text(egui::pos2(rx, rect.center().y - 10.0), Align2::RIGHT_CENTER, right_top, FontId::new(13.0, semibold()), p.text);
+        let r2 = painter.text(egui::pos2(rx, rect.center().y + 10.0), Align2::RIGHT_CENTER, right_bottom, FontId::proportional(12.0), p.muted);
+        // Lange Namen enden auf „…“, der volle Name steht im Tooltip
+        let w1 = r1.left() - 10.0 - tx;
+        let w2 = r2.left() - 10.0 - tx;
+        let cut = style::text_elided(&painter, egui::pos2(tx, rect.center().y - 10.0), title, FontId::new(14.0, semibold()), p.text, w1);
+        style::text_elided(&painter, egui::pos2(tx, rect.center().y + 10.0), subtitle, FontId::proportional(12.0), p.muted, w2);
         if resp.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
-        resp
+        if cut { resp.on_hover_text(title) } else { resp }
     }
 
     /// Legt für jedes Kapitel im Bereich einen eigenen Eintrag an (ab Position t).

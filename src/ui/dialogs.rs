@@ -240,8 +240,8 @@ impl App {
             ui.add_space(6.0);
             let file_kind = matches!(dlg.kind, OutputKind::Vob | OutputKind::Mpeg | OutputKind::Mkv);
             let rows = vob_rows(&disc, &self.plan);
-            // Einzeldateien nur, wenn es mehr als einen Titel gibt
-            if rows.len() < 2 {
+            // Einzeldateien gibt es auch bei nur einem Titel: dann kommt der Dateiname aus der Liste
+            if rows.is_empty() {
                 dlg.separate = false;
             }
             let separate = file_kind && dlg.separate;
@@ -309,8 +309,14 @@ impl App {
 
             if file_kind {
                 ui.add_space(8.0);
-                if rows.len() >= 2 {
-                    style::check(ui, &p, &mut dlg.separate, tr!("Jeden Titel als eigene Datei speichern", "Save each title as a separate file"));
+                if !rows.is_empty() {
+                    let text = if rows.len() == 1 {
+                        tr!("Titel einzeln speichern, Dateiname aus der Liste", "Save title on its own, file name from the list")
+                    } else {
+                        tr!("Jeden Titel als eigene Datei speichern", "Save each title as a separate file")
+                    };
+                    // Ohne Häkchen gilt der Dateiname im Pfad oben
+                    style::check(ui, &p, &mut dlg.separate, text);
                     ui.add_space(4.0);
                 }
                 let head = if separate { tr!("Titel und Dateinamen", "Titles and file names") } else { tr!("Titel für die Datei", "Titles for the file") };
@@ -363,7 +369,7 @@ impl App {
                         shown.push("…".into());
                     }
                     ui.label(
-                        RichText::new(trf!("{}  {} Dateien: {}", "{}  {} files: {}", ic::FILES, files.len(), shown.join(", ")))
+                        RichText::new(format!("{}  {}: {}", ic::FILES, discslim::i18n::count(files.len(), "Datei", "Dateien", "file", "files"), shown.join(", ")))
                             .size(12.5)
                             .color(p.faint),
                     );
@@ -1389,13 +1395,12 @@ fn export_row(ui: &mut Ui, p: &style::Pal, disc: &Disc, row: &ExportRow, thumbs:
         }
     }
     let tx = rect.left() + 4.0 + 2.0 * (tw + 4.0) + 6.0;
-    let right_w = 70.0;
-    let clip = egui::Rect::from_min_max(egui::pos2(tx, rect.top()), egui::pos2(rect.right() - right_w, rect.bottom()));
-    let tp = ui.painter_at(clip);
-    tp.text(egui::pos2(tx, rect.center().y - 9.0), egui::Align2::LEFT_CENTER, &row.name, egui::FontId::new(13.5, semibold()), p.text);
-    tp.text(egui::pos2(tx, rect.center().y + 9.0), egui::Align2::LEFT_CENTER, &row.sub, egui::FontId::proportional(12.0), p.muted);
-    painter.text(egui::pos2(rect.right() - 6.0, rect.center().y), egui::Align2::RIGHT_CENTER, &row.size, egui::FontId::new(12.5, semibold()), p.text);
-    resp
+    let size_r = painter.text(egui::pos2(rect.right() - 6.0, rect.center().y), egui::Align2::RIGHT_CENTER, &row.size, egui::FontId::new(12.5, semibold()), p.text);
+    // Lange Namen enden auf „…“, der volle Name steht im Tooltip
+    let max_w = size_r.left() - 12.0 - tx;
+    let cut = style::text_elided(&painter, egui::pos2(tx, rect.center().y - 9.0), &row.name, egui::FontId::new(13.5, semibold()), p.text, max_w);
+    style::text_elided(&painter, egui::pos2(tx, rect.center().y + 9.0), &row.sub, egui::FontId::proportional(12.0), p.muted, max_w);
+    if cut { resp.on_hover_text(&row.name) } else { resp }
 }
 
 fn vob_rows(disc: &Disc, plan: &Plan) -> Vec<String> {

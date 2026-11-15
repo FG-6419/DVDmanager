@@ -1020,19 +1020,26 @@ impl App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
             ("backup", 5) => self.open_backup_dialog(),
-            ("backupfile" | "backupsep", 5) => {
-                // Export als Datei mit allen Titeln in der Liste; wahlweise als Einzeldateien
+            ("backupfile" | "backupsep" | "backupone", 5) => {
+                // Export als Datei mit allen Titeln in der Liste; wahlweise als Einzeldateien.
+                // „backupone“: nur ein benannter Eintrag, einzeln gespeichert
                 self.plan.mode = Mode::Reauthor;
                 if let Some(d) = self.disc.clone() {
-                    for (i, t) in d.titles.iter().enumerate() {
+                    let n = if state == "backupone" { 1 } else { d.titles.len() };
+                    for (i, t) in d.titles.iter().enumerate().take(n) {
                         let e = discslim::engine::plan::ReauthorEntry::new(i, 0, t.chapters.len().saturating_sub(1), Default::default());
                         self.plan.reauthor.push(e);
+                    }
+                }
+                if state == "backupone" {
+                    if let Some(e) = self.plan.reauthor.first_mut() {
+                        e.name = Some("Mein Lieblingstitel".into());
                     }
                 }
                 self.prefs.backup_kind = OutputKind::Mkv;
                 self.open_backup_dialog();
                 if let Some(dlg) = self.backup_dlg.as_mut() {
-                    dlg.separate = state == "backupsep";
+                    dlg.separate = state != "backupfile";
                 }
             }
             ("about", 5) => self.about_open = true,
@@ -1227,7 +1234,7 @@ impl App {
                     }
                 }
                 if let Some(e) = self.plan.reauthor.get_mut(1) {
-                    e.name = Some("Szene am Strand".into());
+                    e.name = Some("Szene am Strand mit einem sehr langen Namen, der nicht in die Zeile passt".into());
                 }
                 self.sel = Selection::Entry(0);
                 self.start_rename(0);

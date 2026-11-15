@@ -191,6 +191,21 @@ pub fn card<R>(ui: &mut Ui, p: &Pal, add: impl FnOnce(&mut Ui) -> R) -> R {
 }
 
 /// Überschrift einer Gruppe in kleinen Großbuchstaben.
+/// Malt eine Textzeile links mittig bei `pos`, höchstens `max_w` breit; zu lange Texte
+/// enden auf „…“. Gibt zurück, ob gekürzt wurde (dann lohnt ein Tooltip mit dem vollen Text).
+pub fn text_elided(painter: &eframe::egui::Painter, pos: eframe::egui::Pos2, text: &str, font: eframe::egui::FontId, color: eframe::egui::Color32, max_w: f32) -> bool {
+    use eframe::egui::text::{LayoutJob, TextFormat};
+    let mut job = LayoutJob::single_section(text.to_owned(), TextFormat::simple(font, color));
+    job.wrap.max_width = max_w.max(10.0);
+    job.wrap.max_rows = 1;
+    job.wrap.break_anywhere = true;
+    let galley = painter.layout_job(job);
+    let cut = galley.elided;
+    let at = eframe::egui::pos2(pos.x, pos.y - galley.size().y / 2.0);
+    painter.galley(at, galley, color);
+    cut
+}
+
 pub fn section(ui: &mut Ui, p: &Pal, icon: &str, text: &str) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
