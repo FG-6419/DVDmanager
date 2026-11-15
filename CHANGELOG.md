@@ -2,6 +2,10 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.036 · 2026-11-15 11:37
+
+- Einträge der Liste „Neue DVD“ lassen sich umbenennen: Doppelklick auf den Eintrag, F2 oder „Umbenennen“ im Kontextmenü. Enter oder ein Klick daneben übernimmt den Namen, Esc bricht ab, ein leeres Feld stellt „Titel …“ wieder her. Der Name gilt auch beim Export (Titelliste und Dateinamen der Einzeldateien).
+
 ## 1.0.035 · 2026-11-15 10:04
 
 - Export als eine Datei: Die Titelliste zeigt jede Zeile wie die Liste „Neue DVD“, mit Standbildern von Anfang und Ende (bei geschnittenen Einträgen von Schnittanfang und -ende), Name, Kapiteln bzw. Schnittlänge und Größe. Ein Klick auf die Zeile setzt oder entfernt das Häkchen. Bei „Ganze DVD“ stehen dort die Titel der DVD mit Länge und Kapiteln. Mit „Jeden Titel als eigene Datei speichern“ bleiben die Namensfelder wie bisher.

@@ -256,6 +256,8 @@ pub struct App {
     mark_anchor: Option<usize>,
     /// Zuletzt entfernte Einträge mit ihrer Stelle, für „Rückgängig“
     undo_remove: Option<Vec<(usize, discslim::engine::plan::ReauthorEntry)>>,
+    /// Eintrag der Liste „Neue DVD“, der gerade umbenannt wird: Index, Text, Fokus schon gesetzt
+    rename: Option<(usize, String, bool)>,
     /// Vorschaubilder der Einträge und die Schleife unter der Maus
     thumbs: Option<thumbs::Thumbs>,
     hover_loop: Option<thumbs::HoverLoop>,
@@ -446,6 +448,7 @@ impl App {
             marked: Default::default(),
             mark_anchor: None,
             undo_remove: None,
+            rename: None,
             thumbs: Some(thumbs::Thumbs::new(cc.egui_ctx.clone())),
             hover_loop: None,
             target_before_sample: None,
@@ -938,7 +941,19 @@ impl App {
         // Textfeld schreibt oder ein Dialog offen ist.
         let dialog_open = self.backup_dlg.is_some() || self.settings_open || self.about_open || self.scene_dlg.is_some() || self.queue_open || self.result.is_some() || self.error.is_some();
         if self.plan.mode == Mode::Reauthor && !dialog_open && !ctx.egui_wants_keyboard_input() {
-            let (del, undo) = ctx.input_mut(|i| (i.consume_key(egui::Modifiers::NONE, egui::Key::Delete), i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z)));
+            let (del, undo, f2) = ctx.input_mut(|i| {
+                (
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::Delete),
+                    i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z),
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::F2),
+                )
+            });
+            // F2 benennt den gewählten Eintrag um
+            if f2 {
+                if let Selection::Entry(i) = self.sel {
+                    self.start_rename(i);
+                }
+            }
             if del {
                 let chosen = self.chosen_entries();
                 if !chosen.is_empty() {
@@ -1202,6 +1217,24 @@ impl App {
                 if let Ok(log) = std::env::var("DISCSLIM_DEV_LOG") {
                     let _ = std::fs::write(log, out);
                 }
+            }
+            // Umbenennen: zwei Einträge, der zweite hat schon einen Namen, der erste wird bearbeitet
+            ("rename", 5) => {
+                self.plan.mode = Mode::Reauthor;
+                if let Some(d) = self.disc.clone() {
+                    for (i, t) in d.titles.iter().enumerate().take(3) {
+                        self.plan.reauthor.push(discslim::engine::plan::ReauthorEntry::new(i, 0, t.chapters.len().saturating_sub(1), Default::default()));
+                    }
+                }
+                if let Some(e) = self.plan.reauthor.get_mut(1) {
+                    e.name = Some("Szene am Strand".into());
+                }
+                self.sel = Selection::Entry(0);
+                self.start_rename(0);
+                if let Some(r) = self.rename.as_mut() {
+                    r.1 = "Mein Titel".into();
+                }
+                self.preview.dirty = true;
             }
             // Mehrfachauswahl: drei Einträge, 1 und 3 markiert, entfernen, rückgängig
             ("multi", 5) => {

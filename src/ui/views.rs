@@ -476,13 +476,14 @@ impl App {
                 // Bei "Alle Schnitte" folgt die Auswahl dem laufenden Eintrag (siehe sync_preview)
                 let current = self.sel == Selection::Entry(i);
                 let selected = current || self.marked.contains(&i);
+                let renaming = self.rename.as_ref().is_some_and(|(k, _, _)| *k == i);
                 let r = self.entry_row(
                     ui,
                     disc,
                     i,
                     &e,
                     selected,
-                    &name,
+                    if renaming { "" } else { &name },
                     &chapters,
                     &size,
                     mode_label(e.settings.video),
@@ -491,7 +492,19 @@ impl App {
                     let mods = ui.input(|inp| inp.modifiers);
                     self.click_entry(i, mods.command, mods.shift);
                 }
+                // Doppelklick: Namen ändern (gilt auch für den Export)
+                if r.double_clicked() {
+                    self.start_rename(i);
+                }
+                if renaming {
+                    let hint = trf!("Titel {}", "Title {}", disc.titles[e.title].number);
+                    self.rename_field(ui, r.rect, &hint);
+                }
                 r.context_menu(|ui| {
+                    if ui.button(trf!("{}  Umbenennen", "{}  Rename", ic::PENCIL_SIMPLE)).on_hover_text(tr!("F2 oder Doppelklick", "F2 or double-click")).clicked() {
+                        self.start_rename(i);
+                        ui.close();
+                    }
                     if ui.button(trf!("{}  Nach oben", "{}  Move up", ic::ARROW_UP)).clicked() {
                         swap = Some((i, i.wrapping_sub(1)));
                         ui.close();
@@ -590,6 +603,9 @@ impl App {
         if split.is_some() || dup.is_some() || swap.is_some() {
             self.marked.clear();
             self.mark_anchor = None;
+        }
+        if split.is_some() || dup.is_some() || swap.is_some() || remove.is_some() || undo {
+            self.rename = None;
         }
         if let Some(i) = split {
             if i < self.plan.reauthor.len() {
@@ -694,6 +710,39 @@ impl App {
     /// Steht die Maus über einem Bild (oder mit der Einstellung dauerhaft), laufen die ersten
     /// bzw. letzten Sekunden als Schleife; die Länge steht in den Einstellungen.
     #[allow(clippy::too_many_arguments)]
+    /// Beginnt das Umbenennen von Eintrag `i` der Liste „Neue DVD“.
+    pub(super) fn start_rename(&mut self, i: usize) {
+        if let Some(e) = self.plan.reauthor.get(i) {
+            self.rename = Some((i, e.name.clone().unwrap_or_default(), false));
+        }
+    }
+
+    /// Textfeld über der Namenszeile des Eintrags. Enter oder Klick daneben übernimmt,
+    /// Esc bricht ab. Ein leerer Name stellt die übliche Bezeichnung wieder her.
+    fn rename_field(&mut self, ui: &mut Ui, row: Rect, hint: &str) {
+        let Some((i, mut text, focused)) = self.rename.take() else { return };
+        let tx = row.left() + 8.0 + 2.0 * (58.0 + 4.0) + 6.0;
+        let w = (row.right() - tx - 76.0 - 8.0).max(60.0);
+        let rect = Rect::from_min_size(egui::pos2(tx - 4.0, row.center().y - 21.0), Vec2::new(w + 4.0, 22.0));
+        let edit = egui::TextEdit::singleline(&mut text).hint_text(hint).font(FontId::new(14.0, semibold())).margin(egui::Margin::symmetric(4, 1)).desired_width(w);
+        let resp = ui.put(rect, edit);
+        if !focused {
+            resp.request_focus();
+        }
+        let (enter, esc) = ui.input(|inp| (inp.key_pressed(egui::Key::Enter), inp.key_pressed(egui::Key::Escape)));
+        if esc {
+            return;
+        }
+        if resp.lost_focus() || (focused && !resp.has_focus()) || enter {
+            if let Some(e) = self.plan.reauthor.get_mut(i) {
+                let n = text.trim();
+                e.name = (!n.is_empty()).then(|| n.to_string());
+            }
+            return;
+        }
+        self.rename = Some((i, text, true));
+    }
+
     fn entry_row(
         &mut self,
         ui: &mut Ui,
