@@ -445,12 +445,12 @@ impl App {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let ok = !self.plan.reauthor.is_empty();
                 let b = egui::Button::new(RichText::new(trf!("{}  Alle Schnitte abspielen", "{}  Play all cuts", ic::PLAY)).size(12.5));
-                if ui.add_enabled(ok, b).on_hover_text(tr!("Spielt alle Einträge nacheinander so ab, wie sie ausgegeben werden", "Plays all entries one after another as they will be written")).clicked() {
-                    self.update_program();
-                    self.preview.program = true;
-                    self.preview.prog_cur = 0;
-                    self.preview.prog_seek = self.preview.prog.first().map(|c| c.1);
-                    self.preview.prog_play = Some(true);
+                let tip = tr!(
+                    "Springt nacheinander kurz vor jeden Schnitt und spielt ihn bis kurz danach ab, so wie er ausgegeben wird",
+                    "Jumps to shortly before each cut in turn and plays it until shortly after, as it will be written"
+                );
+                if ui.add_enabled(ok, b).on_hover_text(tip).clicked() {
+                    self.play_cut_tour();
                 }
             });
         });

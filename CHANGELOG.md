@@ -2,6 +2,10 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.039 · 2026-11-15 18:03
+
+- „Alle Schnitte abspielen“ über der Liste der neuen DVD spielt jetzt nicht mehr alles von vorn bis hinten, sondern geht die Schnitte durch: Die Vorschau springt kurz vor jeden Schnitt, spielt ihn bis kurz danach ab und springt dann zum nächsten. Dazu gehören der Anfang des ersten Eintrags (wenn er geschnitten ist), jeder Übergang zwischen zwei Einträgen und das Ende des letzten Eintrags (wenn es geschnitten ist). Liegen zwei Stellen dicht beieinander, laufen sie in einem Stück durch. Ohne Schnitte läuft alles wie bisher von vorn bis hinten.
+
 ## 1.0.038 · 2026-11-15 12:12
 
 - Die Titelliste im Export sieht jetzt immer gleich aus, mit Standbildern von Anfang und Ende, Unterzeile und Größe. Mit „Jeden Titel als eigene Datei speichern“ steht in jeder Zeile statt des Namens ein Eingabefeld für den Dateinamen. Ohne die Option bleibt der Name fest.

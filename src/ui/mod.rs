@@ -1188,10 +1188,13 @@ impl App {
                 if let Some(d) = self.disc.clone() {
                     // DISCSLIM_LISTEN=same|samekey: zwei aneinanderliegende Szenen desselben Titels
                     let variant = std::env::var("DISCSLIM_LISTEN").unwrap_or_default();
-                    let parts: [(usize, u64, u64); 2] = if variant.starts_with("same") {
-                        [(0, 10_000, 20_000), (0, 20_000, 30_000)]
+                    // tour: drei Einträge, "Alle Schnitte abspielen" geht alle Schnitte durch
+                    let parts: Vec<(usize, u64, u64)> = if variant.starts_with("same") {
+                        vec![(0, 10_000, 20_000), (0, 20_000, 30_000)]
+                    } else if variant == "tour" {
+                        vec![(0, 10_000, 20_000), (2, 5_000, 15_000), (0, 30_000, 40_000)]
                     } else {
-                        [(0, 10_000, 20_000), (2, 5_000, 15_000)]
+                        vec![(0, 10_000, 20_000), (2, 5_000, 15_000)]
                     };
                     let exact = variant != "samekey";
                     for (t, a, b) in parts {
@@ -1284,6 +1287,7 @@ impl App {
                 // Ansicht „Ganzer Titel“: Wechsel zum zweiten Eintrag
                 self.sel = Selection::Entry(1);
             }
+            ("listen", 40) if std::env::var("DISCSLIM_LISTEN").as_deref() == Ok("tour") => self.play_cut_tour(),
             ("listen", 40) => self.listen_junction(0),
             ("listen", n) if n > 40 => {
                 if let Ok(log) = std::env::var("DISCSLIM_DEV_LOG") {

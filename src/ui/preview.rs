@@ -78,6 +78,8 @@ pub struct PreviewState {
     dev_hold: bool,
     /// Übergang anhören: anhalten, sobald Abschnitt k die Zeit t erreicht (spätestens bis dann)
     pub listen_until: Option<(usize, f64, Instant)>,
+    /// Rundgang durch alle Schnitte: noch anzuhörende Stellen (siehe `Listen`)
+    pub cut_tour: std::collections::VecDeque<Listen>,
     /// Zoombare Zeitleiste mit Standbildern
     pub strip: Strip,
 }
@@ -177,7 +179,30 @@ pub const WAVE_H: f32 = 56.0;
 /// Wie lange vor und nach einer Schnittstelle beim Anhören gespielt wird.
 pub const LISTEN_MS: f64 = 2_500.0;
 
+/// Eine Stelle zum Anhören: ab Abschnitt `0` Zeit `1` spielen, bis Abschnitt `2` die Zeit `3` erreicht.
+pub type Listen = (usize, f64, usize, f64);
+
 impl PreviewState {
+    /// Spielt eine Stelle im Modus "Alle Schnitte" an und hält an ihrem Ende an.
+    fn start_listen(&mut self, (k, from, k2, until): Listen) {
+        self.program = true;
+        self.prog_cur = k;
+        self.time_ms = Some(from as u64);
+        self.prog_seek = Some(from);
+        self.prog_play = Some(true);
+        let len = self.prog_global(k2, until) - self.prog_global(k, from);
+        self.listen_until = Some((k2, until, Instant::now() + Duration::from_secs_f64(len.max(0.0) / 1000.0 + 8.0)));
+    }
+
+    /// Stelle der gemeinsamen Zeitleiste für Abschnitt k, Zeit t (im Titel).
+    fn prog_global(&self, k: usize, t: f64) -> f64 {
+        let (offs, _) = self.prog_offsets();
+        match (self.prog.get(k), offs.get(k)) {
+            (Some(c), Some(o)) => o + (t - c.1),
+            _ => 0.0,
+        }
+    }
+
     /// Zeit des Bildes, das gerade zu sehen ist.
     pub fn current_ms(&self) -> Option<u64> {
         if self.has_frame { self.time_ms } else { None }
@@ -1024,16 +1049,64 @@ impl App {
     pub(super) fn listen_junction(&mut self, i: usize) {
         self.update_program();
         let (Some(a), Some(b)) = (self.preview.prog.get(i).copied(), self.preview.prog.get(i + 1).copied()) else { return };
-        let st = &mut self.preview;
-        st.program = true;
-        st.prog_cur = i;
-        let from = (a.2 - LISTEN_MS).max(a.1);
-        st.time_ms = Some(from as u64);
-        st.prog_seek = Some(from);
-        st.prog_play = Some(true);
-        let until = (b.1 + LISTEN_MS).min(b.2);
-        st.listen_until = Some((i + 1, until, Instant::now() + Duration::from_secs_f64(LISTEN_MS * 2.0 / 1000.0 + 8.0)));
+        self.preview.cut_tour.clear();
+        self.preview.start_listen((i, (a.2 - LISTEN_MS).max(a.1), i + 1, (b.1 + LISTEN_MS).min(b.2)));
         self.sel = Selection::Entry(i);
+    }
+
+    /// "Alle Schnitte abspielen": springt nacheinander kurz vor jede Schnittstelle der neuen
+    /// DVD und spielt sie bis kurz danach (Anfang des ersten Eintrags, Übergänge zwischen
+    /// den Einträgen, Ende des letzten), so wie sie ausgegeben werden. Ohne Schnitte läuft
+    /// alles von vorn bis hinten.
+    pub(super) fn play_cut_tour(&mut self) {
+        self.update_program();
+        let Some(disc) = self.disc.clone() else { return };
+        let prog = self.preview.prog.clone();
+        let Some(&first) = prog.first() else { return };
+        let edge = discslim::engine::plan::CUT_EDGE_MS as f64;
+        let mut stops: Vec<Listen> = Vec::new();
+        if first.1 > edge {
+            stops.push((0, first.1, 0, (first.1 + LISTEN_MS).min(first.2)));
+        }
+        for i in 0..prog.len().saturating_sub(1) {
+            let (a, b) = (prog[i], prog[i + 1]);
+            stops.push((i, (a.2 - LISTEN_MS).max(a.1), i + 1, (b.1 + LISTEN_MS).min(b.2)));
+        }
+        let last = prog.len() - 1;
+        let l = prog[last];
+        let total = self.plan.reauthor.get(l.0).map(|e| discslim::engine::plan::entry_duration_ms(&disc, e) as f64).unwrap_or(l.2);
+        if l.2 < total - edge {
+            stops.push((last, (l.2 - LISTEN_MS).max(l.1), last, l.2));
+        }
+        // Überlappende Stellen (kurze Einträge) zu einer zusammenfassen
+        let st = &mut self.preview;
+        let mut tour: std::collections::VecDeque<Listen> = std::collections::VecDeque::new();
+        for s in stops {
+            if let Some(prev) = tour.back_mut() {
+                if st.prog_global(s.0, s.1) <= st.prog_global(prev.2, prev.3) + 1.0 {
+                    if st.prog_global(s.2, s.3) > st.prog_global(prev.2, prev.3) {
+                        prev.2 = s.2;
+                        prev.3 = s.3;
+                    }
+                    continue;
+                }
+            }
+            tour.push_back(s);
+        }
+        match tour.pop_front() {
+            Some(s) => {
+                st.start_listen(s);
+                st.cut_tour = tour;
+            }
+            None => {
+                st.cut_tour.clear();
+                st.listen_until = None;
+                st.program = true;
+                st.prog_cur = 0;
+                st.prog_seek = Some(first.1);
+                st.prog_play = Some(true);
+            }
+        }
     }
 
     /// Abschnitte für "Alle Schnitte" aus der Liste der neuen DVD.
@@ -1190,13 +1263,21 @@ impl App {
             }
         };
         let st = &mut self.preview;
-        // Übergang anhören: kurz nach der Schnittstelle anhalten
+        // Übergang anhören: kurz nach der Schnittstelle anhalten oder zur nächsten springen
         if let Some((k, t, deadline)) = st.listen_until {
             if Instant::now() > deadline || !st.program {
                 st.listen_until = None;
+                st.cut_tour.clear();
             } else if st.playing && (st.prog_cur > k || (st.prog_cur == k && st.has_frame && st.current_f() >= t)) {
-                st.set_playing(false);
                 st.listen_until = None;
+                match st.cut_tour.pop_front() {
+                    Some(next) => {
+                        st.start_listen(next);
+                        ctx.request_repaint();
+                        return;
+                    }
+                    None => st.set_playing(false),
+                }
             }
         }
         let Some(handle) = st.handle.as_ref() else { return };
