@@ -2,6 +2,10 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.035 · 2026-11-15 10:04
+
+- Export als eine Datei: Die Titelliste zeigt jede Zeile wie die Liste „Neue DVD“, mit Standbildern von Anfang und Ende (bei geschnittenen Einträgen von Schnittanfang und -ende), Name, Kapiteln bzw. Schnittlänge und Größe. Ein Klick auf die Zeile setzt oder entfernt das Häkchen. Bei „Ganze DVD“ stehen dort die Titel der DVD mit Länge und Kapiteln. Mit „Jeden Titel als eigene Datei speichern“ bleiben die Namensfelder wie bisher.
+
 ## 1.0.034 · 2026-11-14 18:32
 
 - „Titel dieser DVD“ steht jetzt in der Reihenfolge der DVD (Titel 1, 2, 3 …). Bisher stand der längste Titel als vermeintlicher Hauptfilm ganz oben, was bei DVDs mit mehreren gleich langen Teilen wie eine falsche Reihenfolge aussah. Intern bleibt die Reihenfolge gleich, gespeicherte Projekte passen also weiter.

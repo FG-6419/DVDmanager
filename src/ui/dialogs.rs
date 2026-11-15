@@ -222,6 +222,8 @@ impl App {
         let mut enqueue = false;
         let mut close = false;
         let start_dir = self.save_start_dir();
+        let export_rows = export_rows(&disc, &self.plan);
+        let thumbs = &mut self.thumbs;
         let dlg = self.backup_dlg.as_mut().unwrap();
         modal(ctx, &p, "backup", 560.0, |ui| {
             ui.label(RichText::new(tr!("Exportieren", "Export")).family(semibold()).size(20.0));
@@ -313,15 +315,26 @@ impl App {
                 }
                 let head = if separate { tr!("Titel und Dateinamen", "Titles and file names") } else { tr!("Titel für die Datei", "Titles for the file") };
                 ui.label(RichText::new(head).family(semibold()).size(13.0).color(p.muted));
-                egui::ScrollArea::vertical().id_salt("vob-titel").max_height(170.0).show(ui, |ui| {
+                let list_h = if separate { 170.0 } else { 250.0 };
+                egui::ScrollArea::vertical().id_salt("vob-titel").max_height(list_h).show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
                     dlg.vob_sel.resize(rows.len(), false);
                     dlg.names.resize(rows.len(), String::new());
                     for (i, default) in rows.iter().enumerate() {
                         if !separate {
-                            // Eine gemeinsame Datei: nur auswählen, welche Titel hinein kommen
-                            let name = if dlg.names[i].trim().is_empty() { default.clone() } else { dlg.names[i].clone() };
-                            style::check(ui, &p, &mut dlg.vob_sel[i], &name);
+                            // Eine gemeinsame Datei: auswählen, welche Titel hinein kommen; jede Zeile
+                            // wie in der Liste „Neue DVD“ mit Bildern von Anfang und Ende
+                            if let Some(row) = export_rows.get(i) {
+                                ui.horizontal(|ui| {
+                                    style::check(ui, &p, &mut dlg.vob_sel[i], "");
+                                    if export_row(ui, &p, &disc, row, thumbs.as_mut()).clicked() {
+                                        dlg.vob_sel[i] = !dlg.vob_sel[i];
+                                    }
+                                });
+                            } else {
+                                let name = if dlg.names[i].trim().is_empty() { default.clone() } else { dlg.names[i].clone() };
+                                style::check(ui, &p, &mut dlg.vob_sel[i], &name);
+                            }
                             continue;
                         }
                         ui.horizontal(|ui| {
@@ -1310,6 +1323,81 @@ fn with_ext_case(s: &str, ext: &str) -> PathBuf {
 }
 
 /// Zeilen für die Titelauswahl der VOB-Ausgabe.
+/// Zeile der Titelliste im Export: Bereich für die Standbilder und die Texte.
+struct ExportRow {
+    title: usize,
+    first: usize,
+    last: usize,
+    start: u64,
+    end: u64,
+    name: String,
+    sub: String,
+    size: String,
+}
+
+/// Zeilen passend zu `vob_rows`: Einträge der neuen DVD bzw. die Titel der DVD.
+fn export_rows(disc: &Disc, plan: &Plan) -> Vec<ExportRow> {
+    match plan.mode {
+        Mode::FullDisc => disc
+            .titles
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                let kind = if t.category == Category::MainMovie { tr!("Hauptfilm", "Main movie") } else { tr!("Extra", "Extra") };
+                ExportRow {
+                    title: i,
+                    first: 0,
+                    last: t.chapters.len().saturating_sub(1),
+                    start: 0,
+                    end: t.ms,
+                    name: trf!("{kind} · Titel {}", "{kind} · Title {}", t.number),
+                    sub: format!("{} · {}", fmt_time(t.ms), discslim::i18n::chapters(t.chapters.len())),
+                    size: discslim::engine::plan::fmt_size(disc.title_stats(t).total),
+                }
+            })
+            .collect(),
+        Mode::Reauthor => plan
+            .reauthor
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| {
+                let (name, sub, size) = super::views::entry_info(disc, i, e)?;
+                let total = discslim::engine::plan::entry_duration_ms(disc, e);
+                let (s, end) = e.cut.effective(total);
+                Some(ExportRow { title: e.title, first: e.first_chapter, last: e.last_chapter, start: s, end: end.min(total), name, sub, size })
+            })
+            .collect(),
+    }
+}
+
+/// Zeichnet eine Zeile der Titelliste: Bilder von Anfang und Ende, Name, Unterzeile, Größe.
+fn export_row(ui: &mut Ui, p: &style::Pal, disc: &Disc, row: &ExportRow, thumbs: Option<&mut super::thumbs::Thumbs>) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 44.0), egui::Sense::click());
+    let painter = ui.painter_at(rect);
+    if resp.hovered() {
+        painter.rect_filled(rect, egui::CornerRadius::same(8), p.hover);
+    }
+    let (tw, th) = (58.0, 34.0);
+    let end_frame = row.end.saturating_sub(40).max(row.start);
+    let mut thumbs = thumbs;
+    for (k, at) in [row.start, end_frame].into_iter().enumerate() {
+        let r = egui::Rect::from_min_size(egui::pos2(rect.left() + 4.0 + k as f32 * (tw + 4.0), rect.center().y - th / 2.0), egui::vec2(tw, th));
+        painter.rect_filled(r, egui::CornerRadius::same(4), p.screen);
+        let seg = || discslim::engine::preview::title_segments(disc, row.title, row.first, row.last);
+        if let Some(tex) = thumbs.as_deref_mut().and_then(|t| t.get((row.title, row.first, row.last, at), &disc.source, seg)) {
+            painter.image(tex, r, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+        }
+    }
+    let tx = rect.left() + 4.0 + 2.0 * (tw + 4.0) + 6.0;
+    let right_w = 70.0;
+    let clip = egui::Rect::from_min_max(egui::pos2(tx, rect.top()), egui::pos2(rect.right() - right_w, rect.bottom()));
+    let tp = ui.painter_at(clip);
+    tp.text(egui::pos2(tx, rect.center().y - 9.0), egui::Align2::LEFT_CENTER, &row.name, egui::FontId::new(13.5, semibold()), p.text);
+    tp.text(egui::pos2(tx, rect.center().y + 9.0), egui::Align2::LEFT_CENTER, &row.sub, egui::FontId::proportional(12.0), p.muted);
+    painter.text(egui::pos2(rect.right() - 6.0, rect.center().y), egui::Align2::RIGHT_CENTER, &row.size, egui::FontId::new(12.5, semibold()), p.text);
+    resp
+}
+
 fn vob_rows(disc: &Disc, plan: &Plan) -> Vec<String> {
     match plan.mode {
         Mode::FullDisc => disc

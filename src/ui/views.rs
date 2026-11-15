@@ -472,34 +472,7 @@ impl App {
             let n = self.plan.reauthor.len();
             for i in 0..n {
                 let e = self.plan.reauthor[i].clone();
-                let Some(t) = disc.titles.get(e.title) else { continue };
-                let chapters = if e.first_chapter == 0 && e.last_chapter + 1 >= t.chapters.len() {
-                    if t.chapters.len() == 1 { tr!("1 Kapitel", "1 chapter").to_string() } else { trf!("Alle {} Kapitel", "All {} chapters", t.chapters.len()) }
-                } else if e.first_chapter == e.last_chapter {
-                    trf!("Kapitel {}", "Chapter {}", e.first_chapter + 1)
-                } else {
-                    trf!("Kapitel {} bis {}", "Chapters {} to {}", e.first_chapter + 1, e.last_chapter + 1)
-                };
-                let mut size = 0.0;
-                for k in reauthor_cells(disc, &e) {
-                    size += disc.stats_for(&k).total;
-                }
-                // Geschnittene Einträge zeigen nur, was übrig bleibt.
-                size *= entry_kept_fraction(disc, &e);
-                let total_ms = entry_duration_ms(disc, &e);
-                let chapters = if e.cut.is_trim(total_ms) {
-                    let total = total_ms;
-                    let len = e.cut.end().min(total).saturating_sub(e.cut.start());
-                    trf!("{} {} geschnitten", "{} {} cut", fmt_time(len), ic::SCISSORS)
-                } else {
-                    chapters
-                };
-                // Eigene Kapitelmarken: Anzahl der neuen Kapitel anhängen
-                let chapters = if e.chapter_marks.is_some() {
-                    trf!("{chapters} · {} {} Kap.", "{chapters} · {} {} ch.", ic::BOOKMARK_SIMPLE, e.chapter_count(disc))
-                } else {
-                    chapters
-                };
+                let Some((name, chapters, size)) = entry_info(disc, i, &e) else { continue };
                 // Bei "Alle Schnitte" folgt die Auswahl dem laufenden Eintrag (siehe sync_preview)
                 let current = self.sel == Selection::Entry(i);
                 let selected = current || self.marked.contains(&i);
@@ -509,12 +482,9 @@ impl App {
                     i,
                     &e,
                     selected,
-                    &match e.name.as_deref().filter(|n| !n.trim().is_empty()) {
-                        Some(name) => format!("{}. {name}", i + 1),
-                        None => trf!("{}. Titel {}", "{}. Title {}", i + 1, t.number),
-                    },
+                    &name,
                     &chapters,
-                    &fmt_size(size),
+                    &size,
                     mode_label(e.settings.video),
                 );
                 if r.clicked() {
@@ -1715,4 +1685,41 @@ fn track_row(ui: &mut Ui, p: &style::Pal, on: &mut bool, text: &str, size: &str)
         });
     });
     changed
+}
+
+/// Angaben zu Eintrag `i` der Liste „Neue DVD“: Name, Unterzeile (Kapitel oder Schnittlänge,
+/// eigene Kapitelmarken) und Größe. Auch für die Titelliste im Export.
+pub(super) fn entry_info(disc: &Disc, i: usize, e: &ReauthorEntry) -> Option<(String, String, String)> {
+    let t = disc.titles.get(e.title)?;
+    let chapters = if e.first_chapter == 0 && e.last_chapter + 1 >= t.chapters.len() {
+        if t.chapters.len() == 1 { tr!("1 Kapitel", "1 chapter").to_string() } else { trf!("Alle {} Kapitel", "All {} chapters", t.chapters.len()) }
+    } else if e.first_chapter == e.last_chapter {
+        trf!("Kapitel {}", "Chapter {}", e.first_chapter + 1)
+    } else {
+        trf!("Kapitel {} bis {}", "Chapters {} to {}", e.first_chapter + 1, e.last_chapter + 1)
+    };
+    let mut size = 0.0;
+    for k in reauthor_cells(disc, e) {
+        size += disc.stats_for(&k).total;
+    }
+    // Geschnittene Einträge zeigen nur, was übrig bleibt.
+    size *= entry_kept_fraction(disc, e);
+    let total_ms = entry_duration_ms(disc, e);
+    let chapters = if e.cut.is_trim(total_ms) {
+        let len = e.cut.end().min(total_ms).saturating_sub(e.cut.start());
+        trf!("{} {} geschnitten", "{} {} cut", fmt_time(len), ic::SCISSORS)
+    } else {
+        chapters
+    };
+    // Eigene Kapitelmarken: Anzahl der neuen Kapitel anhängen
+    let chapters = if e.chapter_marks.is_some() {
+        trf!("{chapters} · {} {} Kap.", "{chapters} · {} {} ch.", ic::BOOKMARK_SIMPLE, e.chapter_count(disc))
+    } else {
+        chapters
+    };
+    let name = match e.name.as_deref().filter(|n| !n.trim().is_empty()) {
+        Some(name) => format!("{}. {name}", i + 1),
+        None => trf!("{}. Titel {}", "{}. Title {}", i + 1, t.number),
+    };
+    Some((name, chapters, fmt_size(size)))
 }
