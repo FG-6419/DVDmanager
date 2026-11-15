@@ -321,26 +321,36 @@ impl App {
                 }
                 let head = if separate { tr!("Titel und Dateinamen", "Titles and file names") } else { tr!("Titel für die Datei", "Titles for the file") };
                 ui.label(RichText::new(head).family(semibold()).size(13.0).color(p.muted));
-                let list_h = if separate { 170.0 } else { 250.0 };
+                let list_h = if separate { 230.0 } else { 250.0 };
                 egui::ScrollArea::vertical().id_salt("vob-titel").max_height(list_h).show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
                     dlg.vob_sel.resize(rows.len(), false);
                     dlg.names.resize(rows.len(), String::new());
                     for (i, default) in rows.iter().enumerate() {
-                        if !separate {
-                            // Eine gemeinsame Datei: auswählen, welche Titel hinein kommen; jede Zeile
-                            // wie in der Liste „Neue DVD“ mit Bildern von Anfang und Ende
-                            if let Some(row) = export_rows.get(i) {
-                                ui.horizontal(|ui| {
-                                    style::check(ui, &p, &mut dlg.vob_sel[i], "");
-                                    if export_row(ui, &p, &disc, row, thumbs.as_mut()).clicked() {
-                                        dlg.vob_sel[i] = !dlg.vob_sel[i];
-                                    }
-                                });
-                            } else {
-                                let name = if dlg.names[i].trim().is_empty() { default.clone() } else { dlg.names[i].clone() };
-                                style::check(ui, &p, &mut dlg.vob_sel[i], &name);
+                        // Jede Zeile wie in der Liste „Neue DVD“ mit Bildern von Anfang und Ende.
+                        // Bei Einzeldateien ist der Name zugleich der Dateiname und lässt sich ändern.
+                        if let Some(row) = export_rows.get(i) {
+                            let mut changed = false;
+                            ui.horizontal(|ui| {
+                                style::check(ui, &p, &mut dlg.vob_sel[i], "");
+                                let name = separate.then(|| (&mut dlg.names[i], default.as_str()));
+                                let (resp, ch) = export_row(ui, &p, &disc, row, thumbs.as_mut(), name);
+                                changed = ch;
+                                if resp.clicked() {
+                                    dlg.vob_sel[i] = !dlg.vob_sel[i];
+                                }
+                            });
+                            if changed && self.plan.mode == Mode::Reauthor {
+                                if let Some(e) = self.plan.reauthor.get_mut(i) {
+                                    let n = dlg.names[i].trim();
+                                    e.name = (!n.is_empty() && n != default).then(|| n.to_string());
+                                }
                             }
+                            continue;
+                        }
+                        if !separate {
+                            let name = if dlg.names[i].trim().is_empty() { default.clone() } else { dlg.names[i].clone() };
+                            style::check(ui, &p, &mut dlg.vob_sel[i], &name);
                             continue;
                         }
                         ui.horizontal(|ui| {
@@ -1377,8 +1387,19 @@ fn export_rows(disc: &Disc, plan: &Plan) -> Vec<ExportRow> {
 }
 
 /// Zeichnet eine Zeile der Titelliste: Bilder von Anfang und Ende, Name, Unterzeile, Größe.
-fn export_row(ui: &mut Ui, p: &style::Pal, disc: &Disc, row: &ExportRow, thumbs: Option<&mut super::thumbs::Thumbs>) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 44.0), egui::Sense::click());
+/// Mit `name` (Text und Platzhalter) steht statt des Namens ein Eingabefeld; der zweite
+/// Rückgabewert sagt, ob es geändert wurde.
+fn export_row(
+    ui: &mut Ui,
+    p: &style::Pal,
+    disc: &Disc,
+    row: &ExportRow,
+    thumbs: Option<&mut super::thumbs::Thumbs>,
+    name: Option<(&mut String, &str)>,
+) -> (egui::Response, bool) {
+    // Mit Eingabefeld etwas höher, damit Feld und Unterzeile übereinander Platz haben
+    let h = if name.is_some() { 54.0 } else { 44.0 };
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), h), egui::Sense::click());
     let painter = ui.painter_at(rect);
     if resp.hovered() {
         painter.rect_filled(rect, egui::CornerRadius::same(8), p.hover);
@@ -1398,9 +1419,19 @@ fn export_row(ui: &mut Ui, p: &style::Pal, disc: &Disc, row: &ExportRow, thumbs:
     let size_r = painter.text(egui::pos2(rect.right() - 6.0, rect.center().y), egui::Align2::RIGHT_CENTER, &row.size, egui::FontId::new(12.5, semibold()), p.text);
     // Lange Namen enden auf „…“, der volle Name steht im Tooltip
     let max_w = size_r.left() - 12.0 - tx;
+    let sub_y = if name.is_some() { rect.bottom() - 10.0 } else { rect.center().y + 9.0 };
+    style::text_elided(&painter, egui::pos2(tx, sub_y), &row.sub, egui::FontId::proportional(12.0), p.muted, max_w);
+    if let Some((text, hint)) = name {
+        let r = egui::Rect::from_min_size(egui::pos2(tx - 4.0, rect.top() + 2.0), egui::vec2(max_w + 4.0, 24.0));
+        let edit = egui::TextEdit::singleline(text).hint_text(hint).font(egui::FontId::new(13.5, semibold())).margin(Margin::symmetric(4, 1)).desired_width(max_w);
+        let changed = ui
+            .put(r, edit)
+            .on_hover_text(tr!("Name des Titels, zugleich Dateiname beim Export als Einzeldateien", "Name of the title, also the file name when exporting separate files"))
+            .changed();
+        return (resp, changed);
+    }
     let cut = style::text_elided(&painter, egui::pos2(tx, rect.center().y - 9.0), &row.name, egui::FontId::new(13.5, semibold()), p.text, max_w);
-    style::text_elided(&painter, egui::pos2(tx, rect.center().y + 9.0), &row.sub, egui::FontId::proportional(12.0), p.muted, max_w);
-    if cut { resp.on_hover_text(&row.name) } else { resp }
+    (if cut { resp.on_hover_text(&row.name) } else { resp }, false)
 }
 
 fn vob_rows(disc: &Disc, plan: &Plan) -> Vec<String> {

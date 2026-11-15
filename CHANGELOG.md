@@ -2,6 +2,10 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.038 · 2026-11-15 12:12
+
+- Die Titelliste im Export sieht jetzt immer gleich aus, mit Standbildern von Anfang und Ende, Unterzeile und Größe. Mit „Jeden Titel als eigene Datei speichern“ steht in jeder Zeile statt des Namens ein Eingabefeld für den Dateinamen. Ohne die Option bleibt der Name fest.
+
 ## 1.0.037 · 2026-11-15 11:58
 
 - Lange Titelnamen werden in der Liste „Neue DVD“ und in der Titelliste des Exports sauber mit „…“ gekürzt statt mitten im Buchstaben abgeschnitten. Der volle Name erscheint, wenn die Maus über der Zeile steht.
