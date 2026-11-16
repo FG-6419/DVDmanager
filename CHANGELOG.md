@@ -2,6 +2,10 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.040 · 2026-11-16 17:06
+
+- Neu: „Am Schnitt in Einträge teilen“ im Bereich Schnitt und im Kontextmenü der Liste. Was vor der Anfangsmarke und nach der Endmarke liegt, wird je ein eigener Eintrag davor und dahinter. Aus einem Titel mit beiden Marken werden so drei Einträge. Der mittlere behält Schnitt, Namen, Blenden und Kapitelmarken und bleibt ausgewählt. Ist nur eine Marke gesetzt, entstehen zwei Einträge.
+
 ## 1.0.039 · 2026-11-15 18:03
 
 - „Alle Schnitte abspielen“ über der Liste der neuen DVD spielt jetzt nicht mehr alles von vorn bis hinten, sondern geht die Schnitte durch: Die Vorschau springt kurz vor jeden Schnitt, spielt ihn bis kurz danach ab und springt dann zum nächsten. Dazu gehören der Anfang des ersten Eintrags (wenn er geschnitten ist), jeder Übergang zwischen zwei Einträgen und das Ende des letzten Eintrags (wenn es geschnitten ist). Liegen zwei Stellen dicht beieinander, laufen sie in einem Stück durch. Ohne Schnitte läuft alles wie bisher von vorn bis hinten.

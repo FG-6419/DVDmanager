@@ -458,6 +458,7 @@ impl App {
         let mut swap = None;
         let mut dup = None;
         let mut split = None;
+        let mut cut_split = None;
         let mut listen = None;
         let mut undo = false;
         ScrollArea::vertical().id_salt("neu").max_height(new_h).auto_shrink([false, false]).show(ui, |ui| {
@@ -523,6 +524,15 @@ impl App {
                         .clicked()
                     {
                         listen = Some(i);
+                        ui.close();
+                    }
+                    let trimmed = e.cut.is_trim(entry_duration_ms(disc, &e));
+                    if ui
+                        .add_enabled(trimmed, egui::Button::new(trf!("{}  Am Schnitt in Einträge teilen", "{}  Split into entries at the cut", ic::SCISSORS)))
+                        .on_hover_text(tr!("Was vor dem Anfang und nach dem Ende liegt, wird je ein eigener Eintrag", "What lies before the start and after the end becomes a separate entry each"))
+                        .clicked()
+                    {
+                        cut_split = Some(i);
                         ui.close();
                     }
                     let n = e.last_chapter + 1 - e.first_chapter.min(e.last_chapter);
@@ -595,6 +605,9 @@ impl App {
         }
         if let Some(i) = listen {
             self.listen_junction(i);
+        }
+        if let Some(i) = cut_split {
+            self.split_at_cut(disc, i);
         }
         if undo {
             self.undo_last_remove();
@@ -980,6 +993,41 @@ impl App {
         self.preview.dirty = true;
     }
 
+    /// Teilt Eintrag `i` an seinen Schnittmarken: Was vor dem Anfang und nach dem Ende liegt,
+    /// wird je ein eigener Eintrag davor und dahinter. Der Eintrag selbst behält Schnitt,
+    /// Name, Blenden und Kapitelmarken. Liefert, ob geteilt wurde.
+    pub(super) fn split_at_cut(&mut self, disc: &Disc, i: usize) -> bool {
+        let Some(e) = self.plan.reauthor.get(i).cloned() else { return false };
+        let total = entry_duration_ms(disc, &e);
+        let edge = discslim::engine::plan::CUT_EDGE_MS;
+        let (a, b) = e.cut.effective(total);
+        let b = b.min(total);
+        let piece = |from: u64, to: u64| {
+            let mut p = ReauthorEntry::new(e.title, e.first_chapter, e.last_chapter, e.settings.clone());
+            p.cut = Cut { start_ms: Some(from), end_ms: Some(to), exact: e.cut.exact };
+            p
+        };
+        let before = (a > edge).then(|| piece(0, a));
+        let after = (b + edge < total).then(|| piece(b, total));
+        if before.is_none() && after.is_none() {
+            return false;
+        }
+        let mut at = i;
+        if let Some(p) = before {
+            self.plan.reauthor.insert(at, p);
+            at += 1;
+        }
+        if let Some(p) = after {
+            self.plan.reauthor.insert(at + 1, p);
+        }
+        self.marked.clear();
+        self.mark_anchor = None;
+        self.rename = None;
+        self.sel = Selection::Entry(at);
+        self.preview.dirty = true;
+        true
+    }
+
     /// Fügt einen Titel als neuen Eintrag hinzu (nur über den +-Knopf).
     fn add_entry(&mut self, disc: &Disc, idx: usize) {
         let Some(t) = disc.titles.get(idx) else { return };
@@ -1285,8 +1333,18 @@ impl App {
             let len = cut.end().min(total).saturating_sub(cut.start());
             ui.label(RichText::new(trf!("Länge nach dem Schnitt: {}", "Length after cut: {}", fmt_time(len))).size(13.0));
         }
+        let trimmed = cut.is_trim(total);
         let _ = changed;
         ui.add_space(2.0);
+        let label = format!("{}  {}", ic::SCISSORS, tr!("Am Schnitt in Einträge teilen", "Split into entries at the cut"));
+        let tip = tr!(
+            "Was vor dem Anfang und nach dem Ende liegt, wird je ein eigener Eintrag davor und dahinter. Aus einem Titel mit beiden Marken werden so drei Einträge.",
+            "What lies before the start and after the end becomes a separate entry before and after it. A title with both markers becomes three entries."
+        );
+        if ui.add_enabled_ui(trimmed, |ui| soft_button(ui, &p, &label)).inner.on_hover_text(tip).on_disabled_hover_text(tr!("Erst Anfang oder Ende setzen", "Set a start or end marker first")).clicked() {
+            self.split_at_cut(disc, i);
+            return;
+        }
         let scenes = soft_button(ui, &p, &format!("{}  {}", ic::FILM_STRIP, tr!("Szenen erkennen …", "Detect scenes …")))
             .on_hover_text(tr!("Teilt den Eintrag an Szenenwechseln in einzelne Einträge", "Splits the entry into separate entries at scene changes"));
         if scenes.clicked() {

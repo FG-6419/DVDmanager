@@ -1228,6 +1228,21 @@ impl App {
                     let _ = std::fs::write(log, out);
                 }
             }
+            // Am Schnitt teilen: Titel 1 mit Marken bei 10 s und 20 s wird zu drei Einträgen
+            ("cutsplit", 5) => {
+                self.plan.mode = Mode::Reauthor;
+                if let Some(d) = self.disc.clone() {
+                    let mut e = discslim::engine::plan::ReauthorEntry::new(0, 0, d.titles[0].chapters.len().saturating_sub(1), Default::default());
+                    e.cut = discslim::engine::plan::Cut { start_ms: Some(10_000), end_ms: Some(20_000), exact: true };
+                    e.name = Some("Mitte".into());
+                    self.plan.reauthor.push(e);
+                    self.split_at_cut(&d, 0);
+                    let line: Vec<String> = self.plan.reauthor.iter().map(|e| format!("{:?}-{:?} {:?}", e.cut.start_ms, e.cut.end_ms, e.name)).collect();
+                    if let Ok(log) = std::env::var("DISCSLIM_DEV_LOG") {
+                        let _ = std::fs::write(log, format!("{line:?} gewählt {:?}\n", self.sel));
+                    }
+                }
+            }
             // Umbenennen: zwei Einträge, der zweite hat schon einen Namen, der erste wird bearbeitet
             ("rename", 5) => {
                 self.plan.mode = Mode::Reauthor;
