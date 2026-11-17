@@ -1420,7 +1420,26 @@ impl App {
                     }
                 }
             }
-            ("allcuts" | "autoplay" | "separate" | "anim", 5) => {
+            // Wechsel von „Nur Schnitt“ zu „Alle Schnitte“ während der Wiedergabe von Eintrag 2:
+            // protokolliert die Stelle vor und nach dem Wechsel
+            ("toall", 40) => {
+                self.preview.cut_view = true;
+                self.sel = Selection::Entry(1);
+            }
+            ("toall", 60) => self.preview.play(),
+            ("toall", n) if n >= 80 && n % 5 == 0 && n <= 110 => {
+                if n == 90 {
+                    self.update_program();
+                    self.preview.enter_program(1);
+                }
+                if let Ok(log) = std::env::var("DISCSLIM_DEV_LOG") {
+                    use std::io::Write;
+                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log) {
+                        let _ = writeln!(f, "Bild {n}: {}", self.preview.dev_status());
+                    }
+                }
+            }
+            ("allcuts" | "autoplay" | "separate" | "anim" | "toall", 5) => {
                 self.plan.mode = discslim::engine::plan::Mode::Reauthor;
                 if let Some(d) = self.disc.clone() {
                     for (i, t) in d.titles.iter().enumerate() {

@@ -1,6 +1,6 @@
 [package]
 name = "dvdmanager"
-version = "1.0.44"
+version = "1.0.45"
 edition = "2021"
 description = "Verkleinert eigene, ungeschuetzte Video-DVDs auf Rohling-Groesse"
 

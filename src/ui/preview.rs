@@ -196,6 +196,21 @@ impl PreviewState {
         self.listen_until = Some((k2, until, Instant::now() + Duration::from_secs_f64(len.max(0.0) / 1000.0 + 8.0)));
     }
 
+    /// Wechsel zu "Alle Schnitte" bei Eintrag k: Liegt das gezeigte Bild in dessen Schnitt,
+    /// läuft die Wiedergabe einfach weiter; sonst geht es am Schnittanfang weiter
+    /// (laufend oder angehalten, wie zuvor).
+    pub fn enter_program(&mut self, k: usize) {
+        let same = self.loaded == Some(Selection::Entry(k)) && self.has_frame;
+        let cur = self.current_f();
+        let inside = self.prog.get(k).is_some_and(|c| cur >= c.1 && cur < c.2);
+        self.program = true;
+        self.prog_cur = k;
+        if !(same && inside) {
+            self.prog_seek = self.prog.get(k).map(|c| c.1);
+            self.prog_play = Some(self.playing);
+        }
+    }
+
     /// Stelle der gemeinsamen Zeitleiste für Abschnitt k, Zeit t (im Titel).
     fn prog_global(&self, k: usize, t: f64) -> f64 {
         let (offs, _) = self.prog_offsets();
@@ -1996,12 +2011,8 @@ impl App {
                         st.cut_view = view == 1;
                         let to_all = view == 2;
                         if to_all && !st.program {
-                            // Beim gewählten Eintrag beginnen
                             let k = sel_entry.filter(|i| *i < st.prog.len()).unwrap_or(0);
-                            st.program = true;
-                            st.prog_cur = k;
-                            st.prog_seek = st.prog.get(k).map(|c| c.1);
-                            st.prog_play = Some(false);
+                            st.enter_program(k);
                         } else if !to_all {
                             st.program = false;
                         }
