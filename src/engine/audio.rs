@@ -62,6 +62,10 @@ impl AudioBus {
     pub fn push(&self, seek_id: u64, start_ms: f64, samples: Vec<i16>) {
         self.with(|s| {
             if s.seek_id == seek_id && !samples.is_empty() {
+                let start_ms = match s.chunks.back() {
+                    Some((ps, pd)) => seamless_start(*ps + (pd.len() / 2) as f64 * 1000.0 / RATE, start_ms),
+                    None => start_ms,
+                };
                 s.chunks.push_back((start_ms, samples));
                 // Nicht unbegrenzt sammeln (etwa 20 Sekunden)
                 while s.chunks.len() > 800 {
@@ -106,6 +110,17 @@ impl AudioBus {
     pub fn shutdown(&self) {
         self.with(|s| s.quit = true);
     }
+}
+
+/// Bis zu dieser Abweichung (Millisekunden) gilt ein Tonstück als direkte Fortsetzung
+/// des vorigen. Die Zeit jedes Stücks wird je VOBU aus der Zellzeit der DVD abgeleitet,
+/// die nur bildgenau ist (bei NTSC zudem gerundet); ohne Angleichen entstünden an jeder
+/// VOBU-Grenze kurze Lücken oder Sprünge, die knacken.
+const SEAMLESS_MS: f64 = 45.0;
+
+/// Startzeit eines neuen Stücks: liegt sie nahe am Ende des vorigen, schließt es nahtlos an.
+fn seamless_start(prev_end: f64, start: f64) -> f64 {
+    if (start - prev_end).abs() <= SEAMLESS_MS { prev_end } else { start }
 }
 
 /// Füllt `frames` Stereo-Abtastwerte ab der Zeit `cursor` aus den gesammelten Stücken.
@@ -980,4 +995,40 @@ pub fn split_frames(d: &[u8], codec: Codec) -> Vec<(usize, usize)> {
         pos = start + len;
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Stücke mit leicht verrutschten Zeiten (wie aus der bildgenauen Zellzeit) spielen
+    /// lückenlos hintereinander: kein eingeschobener Nullwert, nichts übersprungen.
+    #[test]
+    fn jittered_chunks_play_seamlessly() {
+        let bus = AudioBus::default();
+        bus.reset(1);
+        // Fortlaufende Werte 1, 2, 3, … in Stücken zu 480 Abtastwerten (10 ms)
+        let mut next = 1i16;
+        for (k, jitter) in [0.0, 3.0, -4.0, 7.5, -0.6, 12.0].iter().enumerate() {
+            let data: Vec<i16> = (0..480).flat_map(|_| {
+                let v = next;
+                next = next.wrapping_add(1);
+                [v, v]
+            }).collect();
+            bus.push(1, k as f64 * 10.0 + jitter, data);
+        }
+        let mut out = Vec::new();
+        bus.with(|s| fill(&mut s.chunks, 0.0, 6 * 480, &mut out));
+        let left: Vec<i16> = out.chunks_exact(2).map(|p| p[0]).collect();
+        let expected: Vec<i16> = (1..=6 * 480).map(|v| v as i16).collect();
+        assert_eq!(left, expected);
+    }
+
+    /// Ein echter Sprung (weit weg vom Ende des vorigen Stücks) bleibt ein Sprung.
+    #[test]
+    fn real_gap_is_kept() {
+        assert_eq!(seamless_start(100.0, 103.0), 100.0);
+        assert_eq!(seamless_start(100.0, 500.0), 500.0);
+        assert_eq!(seamless_start(100.0, 20.0), 20.0);
+    }
 }

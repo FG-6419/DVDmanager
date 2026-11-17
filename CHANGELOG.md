@@ -2,6 +2,10 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.043 · 2026-11-17 10:46
+
+- Vorschau-Ton ohne Knacken: Die Zeit jedes Tonstücks wird je Bildgruppe aus der Zellzeit der DVD abgeleitet, und die ist nur bildgenau (bei NTSC zusätzlich gerundet). Weicht sie um ein paar Millisekunden ab, schob die Vorschau eine winzige Stille ein oder übersprang Abtastwerte, was als Knacken zu hören war. Stücke, die bis auf 45 ms an das vorige anschließen, laufen jetzt nahtlos weiter. Echte Sprünge (Schnitte, Springen in der Zeitleiste) bleiben Sprünge. Die Ausgabe war davon nie betroffen.
+
 ## 1.0.042 · 2026-11-17 10:32
 
 - Kapitelmarken zeigen jetzt nur, was zum gewählten Eintrag gehört. „Kapitel bearbeiten“ übernimmt nur die DVD-Kapitel im geschnittenen Bereich, nicht mehr alle Kapitel des ursprünglichen Titels. Bei einem ausgeschnittenen Teil beginnst du so mit einer leeren oder passenden Liste und kannst eigene Marken ergänzen.
