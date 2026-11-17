@@ -2,6 +2,10 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.047 · 2026-11-17 17:01
+
+- Geöffnete Dateien sind gegen Löschen gesperrt. Solange eine DVD, ein ISO-Abbild oder eine Videodatei geöffnet ist (auch während die Warteschlange sie abarbeitet), lassen sich ihre Dateien im Explorer nicht löschen, umbenennen oder verschieben; Windows meldet dann „Die Datei ist in einem anderen Programm geöffnet“. Gleiches gilt für die geöffnete Projektdatei, die sich weiterhin speichern lässt. Nach dem Schließen oder Beenden ist alles wieder frei. Eingelegte DVDs im Laufwerk werden nicht gesperrt, damit sie sich auswerfen lassen.
+
 ## 1.0.046 · 2026-11-17 16:32
 
 - ISO-Abbilder mit einer VOB-Datei von genau 1 GiB werden wieder vollständig gelesen. Manche Brennprogramme tragen diese Länge so ein, dass sie in die Typ-Bits des UDF-Eintrags überläuft. Die Datei (z. B. VTS_01_2.VOB) galt dann als leer und fehlte, alle folgenden Teile rutschten um 1 GiB nach vorn. In der Vorschau sprang der Zeitmarker dadurch plötzlich zurück und das Bild lief im Zeitraffer; auch ein Backup aus so einem Abbild war unvollständig.

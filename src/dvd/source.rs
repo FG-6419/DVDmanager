@@ -46,6 +46,9 @@ pub struct Source {
     pub label: String,
     pub origin: PathBuf,
     pub files: Arc<HashMap<String, FileRef>>,
+    /// Offene Griffe, die die Quelldateien gegen Löschen und Verschieben sperren,
+    /// solange irgendetwas diese Quelle noch benutzt.
+    pub locks: Arc<Vec<File>>,
 }
 
 /// Welcher VOB-Bereich gelesen wird. `vts` 0 ist der Hauptmenü-Bereich der Disc.
@@ -89,7 +92,7 @@ impl Source {
             return Err(tr!("Im ISO-Abbild gibt es keine VIDEO_TS.IFO. Es ist wohl keine Video-DVD.", "The ISO image has no VIDEO_TS.IFO. It is probably not a video DVD.").into());
         }
         let label = if label.trim().is_empty() { file_label(path) } else { label };
-        Ok(Source { label, origin: path.to_path_buf(), files: Arc::new(files) })
+        Ok(Source { label, origin: path.to_path_buf(), files: Arc::new(files), locks: Arc::default() })
     }
 
     fn open_dir(path: &Path) -> Res<Source> {
@@ -112,7 +115,27 @@ impl Source {
         } else {
             dir.clone()
         };
-        Ok(Source { label: file_label(&base), origin: path.to_path_buf(), files: Arc::new(files) })
+        Ok(Source { label: file_label(&base), origin: path.to_path_buf(), files: Arc::new(files), locks: Arc::default() })
+    }
+
+    /// Sperrt die Dateien dieser Quelle (ISO bzw. alle Dateien in VIDEO_TS) gegen Löschen,
+    /// Umbenennen und Verschieben, z. B. im Explorer. Lesen und Schreiben bleiben möglich.
+    /// Auf einem optischen Laufwerk nicht, damit sich die Scheibe auswerfen lässt.
+    pub fn lock(&mut self) {
+        if is_optical(&self.origin) {
+            return;
+        }
+        let mut paths: Vec<&Path> = self
+            .files
+            .values()
+            .map(|f| match f {
+                FileRef::Disk(p) => p.as_path(),
+                FileRef::Iso { path, .. } => path.as_path(),
+            })
+            .collect();
+        paths.sort();
+        paths.dedup();
+        self.locks = Arc::new(paths.into_iter().filter_map(lock_file).collect());
     }
 
     /// Liest eine ganze Datei; fällt bei IFO-Dateien auf die Sicherung (BUP) zurück.
@@ -182,6 +205,43 @@ impl Source {
             refs.push(r);
         }
         Ok(SpaceReader { parts: refs, offs, total: acc, open: None })
+    }
+}
+
+/// Öffnet eine Datei so, dass andere sie lesen und beschreiben, aber nicht löschen,
+/// umbenennen oder verschieben können, solange der Griff offen ist.
+pub fn lock_file(path: &Path) -> Option<File> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_SHARE_READ: u32 = 1;
+        const FILE_SHARE_WRITE: u32 = 2;
+        std::fs::OpenOptions::new().read(true).share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE).open(path).ok()
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        None
+    }
+}
+
+#[cfg(all(test, windows))]
+mod lock_tests {
+    #[test]
+    fn locked_file_cannot_be_deleted_or_moved_but_rewritten() {
+        let dir = std::env::temp_dir().join(format!("dvdmanager-sperre-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let p = dir.join("projekt.dvdproj");
+        std::fs::write(&p, b"alt").unwrap();
+        let lock = super::lock_file(&p).expect("Sperre");
+        assert!(std::fs::remove_file(&p).is_err(), "ließ sich löschen");
+        assert!(std::fs::rename(&p, dir.join("weg.dvdproj")).is_err(), "ließ sich verschieben");
+        assert!(std::fs::rename(&dir, dir.with_extension("weg")).is_err(), "Ordner ließ sich verschieben");
+        crate::dvd::write_output(&p, b"neu").expect("Speichern trotz Sperre");
+        assert_eq!(std::fs::read(&p).unwrap(), b"neu");
+        drop(lock);
+        std::fs::remove_file(&p).expect("nach dem Freigeben löschbar");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

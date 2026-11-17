@@ -60,12 +60,16 @@ fn is_dvd_folder(dir: &Path) -> bool {
 /// `progress` erhält Anteil und Text und liefert false zum Abbrechen.
 pub fn open_source(path: &Path, progress: &mut dyn FnMut(f32, &str) -> bool) -> Res<Source> {
     if !is_media_path(path) {
-        return Source::open(path);
+        let mut s = Source::open(path)?;
+        s.lock();
+        return Ok(s);
     }
     let dir = import_cached(path, progress)?;
     let mut s = Source::open(&dir)?;
     s.label = path.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "Video".into());
     s.origin = path.to_path_buf();
+    // Die umgepackte Kopie liegt im Zwischenspeicher; gesperrt wird die Datei des Benutzers.
+    s.locks = std::sync::Arc::new(crate::dvd::source::lock_file(path).into_iter().collect());
     Ok(s)
 }
 

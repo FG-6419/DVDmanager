@@ -271,6 +271,8 @@ pub struct App {
     pending_project: Option<Project>,
     /// Datei, in der das aktuelle Projekt zuletzt gespeichert oder aus der es geladen wurde
     project_path: Option<PathBuf>,
+    /// Sperre der aktuellen Projektdatei gegen Löschen und Verschieben (Pfad, Griff)
+    project_lock: Option<(PathBuf, Option<std::fs::File>)>,
     /// Kurze Meldung in der Kopfzeile (Text, seit)
     notice: Option<(String, Instant)>,
     /// Stapelverarbeitung
@@ -454,6 +456,7 @@ impl App {
             target_before_sample: None,
             pending_project: None,
             project_path: None,
+            project_lock: None,
             notice: None,
             queue: Queue::default(),
             queue_open: false,
@@ -1692,6 +1695,13 @@ impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.pump_loader(ctx);
         self.pump_job(ctx);
+        // Die geöffnete Projektdatei gegen Löschen sperren; folgt Laden, Speichern unter, Schließen.
+        if self.project_lock.as_ref().map(|l| &l.0) != self.project_path.as_ref() {
+            self.project_lock = self.project_path.clone().map(|p| {
+                let f = discslim::dvd::source::lock_file(&p);
+                (p, f)
+            });
+        }
         self.handle_dropped(ctx);
         self.handle_shortcuts(ctx);
         if self.queue.is_running() {
