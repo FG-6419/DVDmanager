@@ -1480,23 +1480,35 @@ impl App {
         let total = entry_duration_ms(disc, e);
         let (cut_a, cut_b) = e.cut.effective(total);
         let cut_b = cut_b.min(total);
+        // Nur Marken im geschnittenen Bereich gehören zu diesem Eintrag
+        let inside = |m: u64| m > cut_a && m < cut_b;
         let Some(marks) = e.chapter_marks.clone() else {
-            let n = e.last_chapter + 1 - e.first_chapter.min(e.last_chapter);
-            let text = if n == 1 { tr!("Die DVD hat hier 1 Kapitel.", "The DVD has 1 chapter here.").to_string() } else { trf!("Die {n} Kapitel der DVD werden übernommen.", "The DVD's {n} chapters are kept.") };
+            let dvd: Vec<u64> = e.original_marks(disc).into_iter().filter(|m| inside(*m)).collect();
+            let n = dvd.len() + 1;
+            let trimmed = e.cut.is_trim(total);
+            let text = match (n, trimmed) {
+                (1, false) => tr!("Die DVD hat hier 1 Kapitel.", "The DVD has 1 chapter here.").to_string(),
+                (1, true) => tr!("Im Schnitt beginnt kein weiteres Kapitel der DVD.", "No further DVD chapter starts within the cut.").to_string(),
+                (_, false) => trf!("Die {n} Kapitel der DVD werden übernommen.", "The DVD's {n} chapters are kept."),
+                (_, true) => trf!("Im Schnitt liegen {n} Kapitel der DVD, sie werden übernommen.", "{n} DVD chapters lie within the cut; they are kept."),
+            };
             ui.label(RichText::new(text).size(13.0).color(p.muted));
             // Umbrechen statt rechts abschneiden, wenn die Spalte schmal ist
             ui.horizontal_wrapped(|ui| {
                 if ui
                     .button(RichText::new(trf!("{}  Kapitel bearbeiten", "{}  Edit chapters", ic::PENCIL_SIMPLE)).size(13.0))
-                    .on_hover_text(tr!("Übernimmt die Kapitel der DVD als Marken, die du dann ändern kannst", "Takes over the DVD's chapters as markers that you can then change"))
+                    .on_hover_text(tr!(
+                        "Übernimmt die Kapitel der DVD im geschnittenen Bereich als Marken, die du dann ändern und ergänzen kannst",
+                        "Takes over the DVD's chapters within the cut range as markers that you can then change and add to"
+                    ))
                     .clicked()
                 {
-                    let m = self.plan.reauthor[i].original_marks(disc);
-                    self.plan.reauthor[i].chapter_marks = Some(m);
+                    self.plan.reauthor[i].chapter_marks = Some(dvd.clone());
                 }
                 if ui
-                    .add_enabled(now.is_some(), egui::Button::new(RichText::new(trf!("{}  Neu: Marke hier", "{}  New: marker here", ic::MAP_PIN)).size(13.0)))
+                    .add_enabled(now.is_some_and(inside), egui::Button::new(RichText::new(trf!("{}  Neu: Marke hier", "{}  New: marker here", ic::MAP_PIN)).size(13.0)))
                     .on_hover_text(tr!("Verwirft die Kapitel der DVD und beginnt mit einer Marke an der Stelle der Vorschau", "Discards the DVD's chapters and starts with a marker at the preview position"))
+                    .on_disabled_hover_text(tr!("Die Vorschau steht außerhalb des Schnitts", "The preview is outside the cut"))
                     .clicked()
                 {
                     let mut m: Vec<u64> = now.into_iter().collect();
@@ -1539,11 +1551,17 @@ impl App {
             });
             let mut remove = None;
             let mut nudge: Option<(usize, i64)> = None;
+            // Marken außerhalb des Schnitts (z. B. aus dem ganzen Titel) nicht zeigen;
+            // sie entfallen ohnehin und kommen wieder, wenn der Schnitt sie einschließt.
+            let mut shown = 1;
             for (k, m) in marks.iter().enumerate() {
-                let outside = *m <= cut_a || *m >= cut_b;
+                if !inside(*m) {
+                    continue;
+                }
+                shown += 1;
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
-                    row(ui, k + 2, *m, outside);
+                    row(ui, shown, *m, false);
                     ui.spacing_mut().item_spacing.x = 0.0;
                     if mini(ui, ic::ARROW_LINE_RIGHT, tr!("In der Vorschau zu dieser Marke springen", "Jump to this marker in the preview")) {
                         seek = Some(*m);
@@ -1567,8 +1585,22 @@ impl App {
                 marks.remove(k);
                 changed = true;
             }
+            let hidden = marks.iter().filter(|m| !inside(**m)).count();
+            if hidden > 0 {
+                ui.label(
+                    RichText::new(trf!(
+                        "{} außerhalb des Schnitts ausgeblendet",
+                        "{} outside the cut hidden",
+                        discslim::i18n::count(hidden, "Marke", "Marken", "marker", "markers")
+                    ))
+                    .size(12.0)
+                    .color(p.faint),
+                );
+            }
             if let Some((k, d)) = nudge {
-                let v = (marks[k] as i64 + d).clamp(0, total as i64) as u64;
+                // Im Schnitt bleiben, sonst verschwände die Marke aus der Liste
+                let (lo, hi) = (cut_a as i64 + 1, (cut_b as i64 - 1).max(cut_a as i64 + 1));
+                let v = (marks[k] as i64 + d).clamp(lo, hi) as u64;
                 marks[k] = v;
                 changed = true;
                 // Vorschau zeigt das Bild an der neuen Stelle der Marke
@@ -1578,8 +1610,9 @@ impl App {
         ui.add_space(4.0);
         ui.horizontal_wrapped(|ui| {
             let b = ui
-                .add_enabled(now.is_some(), egui::Button::new(RichText::new(trf!("{}  Marke hier", "{}  Marker here", ic::PLUS)).size(13.0)))
-                .on_hover_text(tr!("Setzt eine Kapitelmarke an das Bild, das die Vorschau gerade zeigt", "Sets a chapter marker at the frame the preview is showing"));
+                .add_enabled(now.is_some_and(inside), egui::Button::new(RichText::new(trf!("{}  Marke hier", "{}  Marker here", ic::PLUS)).size(13.0)))
+                .on_hover_text(tr!("Setzt eine Kapitelmarke an das Bild, das die Vorschau gerade zeigt", "Sets a chapter marker at the frame the preview is showing"))
+                .on_disabled_hover_text(tr!("Die Vorschau steht außerhalb des Schnitts", "The preview is outside the cut"));
             if b.clicked() {
                 if let Some(t) = now {
                     marks.push(t);

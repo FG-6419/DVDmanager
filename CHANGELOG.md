@@ -2,6 +2,13 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.042 · 2026-11-17 10:32
+
+- Kapitelmarken zeigen jetzt nur, was zum gewählten Eintrag gehört. „Kapitel bearbeiten“ übernimmt nur die DVD-Kapitel im geschnittenen Bereich, nicht mehr alle Kapitel des ursprünglichen Titels. Bei einem ausgeschnittenen Teil beginnst du so mit einer leeren oder passenden Liste und kannst eigene Marken ergänzen.
+- Die Markenliste blendet Marken außerhalb des Schnitts aus. Darunter steht, wie viele das sind. Sie kommen wieder, wenn du den Schnitt vergrößerst.
+- Der Hinweis zu den DVD-Kapiteln nennt die Zahl im Schnitt („Im Schnitt liegen 2 Kapitel der DVD …“).
+- „Marke hier“ und „Neu: Marke hier“ sind nur aktiv, wenn die Vorschau im Schnitt steht. Verschieben mit den Pfeilen oder der Stecknadel hält die Marke im Schnitt.
+
 ## 1.0.041 · 2026-11-17 10:18
 
 - Behoben: „Neu: Marke hier“ war bei schmalerem Fenster nicht zu sehen. Einige Zeilen im Bereich rechts waren breiter als die Spalte, dadurch ragte die ganze Spalte aus dem Fenster und Knöpfe am rechten Rand wurden abgeschnitten. Die Zeilen für Schnitt und Kapitelmarken sind jetzt kompakter, und Knopfreihen brechen um, statt abgeschnitten zu werden.
