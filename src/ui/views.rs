@@ -458,7 +458,6 @@ impl App {
         let mut swap = None;
         let mut dup = None;
         let mut split = None;
-        let mut cut_split = None;
         let mut listen = None;
         let mut undo = false;
         ScrollArea::vertical().id_salt("neu").max_height(new_h).auto_shrink([false, false]).show(ui, |ui| {
@@ -526,19 +525,15 @@ impl App {
                         listen = Some(i);
                         ui.close();
                     }
-                    let trimmed = e.cut.is_trim(entry_duration_ms(disc, &e));
+                    let n = Self::chapter_split_points(disc, &e).len() + 1;
+                    let label = if n > 1 {
+                        trf!("{}  An Kapiteln in {n} Einträge teilen", "{}  Split into {n} entries at chapters", ic::SCISSORS)
+                    } else {
+                        trf!("{}  An Kapiteln in Einträge teilen", "{}  Split into entries at chapters", ic::SCISSORS)
+                    };
                     if ui
-                        .add_enabled(trimmed, egui::Button::new(trf!("{}  Am Schnitt in Einträge teilen", "{}  Split into entries at the cut", ic::SCISSORS)))
-                        .on_hover_text(tr!("Was vor dem Anfang und nach dem Ende liegt, wird je ein eigener Eintrag", "What lies before the start and after the end becomes a separate entry each"))
-                        .clicked()
-                    {
-                        cut_split = Some(i);
-                        ui.close();
-                    }
-                    let n = e.last_chapter + 1 - e.first_chapter.min(e.last_chapter);
-                    if ui
-                        .add_enabled(n > 1, egui::Button::new(trf!("{}  In {n} Einzeltitel zerlegen", "{}  Split into {n} separate titles", ic::LIST_BULLETS)))
-                        .on_hover_text(tr!("Ersetzt diesen Eintrag durch je einen Eintrag pro Kapitel", "Replaces this entry with one entry per chapter"))
+                        .add_enabled(n > 1, egui::Button::new(label))
+                        .on_hover_text(tr!("Ersetzt diesen Eintrag durch je einen Eintrag pro Kapitel im geschnittenen Bereich", "Replaces this entry with one entry per chapter within the cut range"))
                         .clicked()
                     {
                         split = Some(i);
@@ -606,9 +601,6 @@ impl App {
         if let Some(i) = listen {
             self.listen_junction(i);
         }
-        if let Some(i) = cut_split {
-            self.split_at_cut(disc, i);
-        }
         if undo {
             self.undo_last_remove();
         }
@@ -621,9 +613,9 @@ impl App {
             self.rename = None;
         }
         if let Some(i) = split {
-            if i < self.plan.reauthor.len() {
-                let e = self.plan.reauthor.remove(i);
-                self.split_chapters(disc, e.title, e.first_chapter, e.last_chapter, e.settings, i);
+            let n = self.split_at_chapters(disc, i);
+            if n > 0 {
+                self.notice = Some((trf!("In {n} Einträge geteilt", "Split into {n} entries"), std::time::Instant::now()));
             }
         }
         if let Some(i) = dup {
@@ -993,39 +985,56 @@ impl App {
         self.preview.dirty = true;
     }
 
-    /// Teilt Eintrag `i` an seinen Schnittmarken: Was vor dem Anfang und nach dem Ende liegt,
-    /// wird je ein eigener Eintrag davor und dahinter. Der Eintrag selbst behält Schnitt,
-    /// Name, Blenden und Kapitelmarken. Liefert, ob geteilt wurde.
-    pub(super) fn split_at_cut(&mut self, disc: &Disc, i: usize) -> bool {
-        let Some(e) = self.plan.reauthor.get(i).cloned() else { return false };
-        let total = entry_duration_ms(disc, &e);
-        let edge = discslim::engine::plan::CUT_EDGE_MS;
+    /// Kapitelanfänge im geschnittenen Bereich von Eintrag `i`, an denen geteilt werden kann:
+    /// die eigenen Kapitelmarken, sonst die Kapitel der DVD.
+    pub(super) fn chapter_split_points(disc: &Disc, e: &ReauthorEntry) -> Vec<u64> {
+        let total = entry_duration_ms(disc, e);
         let (a, b) = e.cut.effective(total);
         let b = b.min(total);
-        let piece = |from: u64, to: u64| {
-            let mut p = ReauthorEntry::new(e.title, e.first_chapter, e.last_chapter, e.settings.clone());
-            p.cut = Cut { start_ms: Some(from), end_ms: Some(to), exact: e.cut.exact };
-            p
-        };
-        let before = (a > edge).then(|| piece(0, a));
-        let after = (b + edge < total).then(|| piece(b, total));
-        if before.is_none() && after.is_none() {
-            return false;
+        let edge = discslim::engine::plan::CUT_EDGE_MS;
+        let marks = e.chapter_marks.clone().unwrap_or_else(|| e.original_marks(disc));
+        marks.into_iter().filter(|m| *m > a + edge && *m + edge < b).collect()
+    }
+
+    /// Teilt Eintrag `i` an seinen Kapitelanfängen (eigene Marken oder die der DVD) in
+    /// einzelne Einträge. Schnitt und Einstellungen bleiben; die Einblende bekommt der
+    /// erste Teil, die Ausblende der letzte. Ein Name wird durchnummeriert.
+    pub(super) fn split_at_chapters(&mut self, disc: &Disc, i: usize) -> usize {
+        let Some(e) = self.plan.reauthor.get(i).cloned() else { return 0 };
+        let points = Self::chapter_split_points(disc, &e);
+        if points.is_empty() {
+            return 0;
         }
-        let mut at = i;
-        if let Some(p) = before {
-            self.plan.reauthor.insert(at, p);
-            at += 1;
-        }
-        if let Some(p) = after {
-            self.plan.reauthor.insert(at + 1, p);
-        }
+        let total = entry_duration_ms(disc, &e);
+        let (a, b) = e.cut.effective(total);
+        let mut bounds = vec![a];
+        bounds.extend(points);
+        bounds.push(b.min(total));
+        let n = bounds.len() - 1;
+        let pieces: Vec<ReauthorEntry> = bounds
+            .windows(2)
+            .enumerate()
+            .map(|(k, w)| {
+                let mut p = ReauthorEntry::new(e.title, e.first_chapter, e.last_chapter, e.settings.clone());
+                p.cut = Cut { start_ms: Some(w[0]), end_ms: Some(w[1]), exact: e.cut.exact };
+                p.fade = e.fade.clone();
+                if k > 0 {
+                    p.fade.fade_in = FadeKind::None;
+                }
+                if k + 1 < n {
+                    p.fade.fade_out = FadeKind::None;
+                }
+                p.name = e.name.as_ref().map(|name| trf!("{} – Teil {}", "{} – part {}", name, k + 1));
+                p
+            })
+            .collect();
+        self.plan.reauthor.splice(i..=i, pieces);
         self.marked.clear();
         self.mark_anchor = None;
         self.rename = None;
-        self.sel = Selection::Entry(at);
+        self.sel = Selection::Entry(i);
         self.preview.dirty = true;
-        true
+        n
     }
 
     /// Fügt einen Titel als neuen Eintrag hinzu (nur über den +-Knopf).
@@ -1274,7 +1283,7 @@ impl App {
     /// Schnittmarken eines Eintrags: Anfang und Ende, wahlweise bildgenau.
     fn view_cut(&mut self, ui: &mut Ui, disc: &Disc, i: usize) {
         let p = self.pal;
-        let now = self.preview.current_ms();
+        let now = self.marker_time(i);
         let total = entry_duration_ms(disc, &self.plan.reauthor[i]);
         section(ui, &p, ic::SCISSORS, tr!("SCHNITT", "CUT"));
         let cut = &mut self.plan.reauthor[i].cut;
@@ -1284,6 +1293,9 @@ impl App {
             [(tr!("Anfang", "Start"), &mut cut.start_ms, tr!("Titelanfang", "Title start"), 0), (tr!("Ende", "End"), &mut cut.end_ms, tr!("Titelende", "Title end"), total.saturating_sub(40))]
         {
             ui.horizontal(|ui| {
+                // Enger Abstand: Die Zeile muss auch in die schmalste Spalte passen, sonst
+                // wird die ganze Spalte breiter und rechts abgeschnitten.
+                ui.spacing_mut().item_spacing.x = 4.0;
                 ui.add_sized([52.0, 24.0], egui::Label::new(RichText::new(label).color(p.muted)));
                 let text = value.map(fmt_time_precise).unwrap_or_else(|| empty.to_string());
                 ui.add_sized([86.0, 24.0], egui::Label::new(RichText::new(text).family(semibold())));
@@ -1333,18 +1345,8 @@ impl App {
             let len = cut.end().min(total).saturating_sub(cut.start());
             ui.label(RichText::new(trf!("Länge nach dem Schnitt: {}", "Length after cut: {}", fmt_time(len))).size(13.0));
         }
-        let trimmed = cut.is_trim(total);
         let _ = changed;
         ui.add_space(2.0);
-        let label = format!("{}  {}", ic::SCISSORS, tr!("Am Schnitt in Einträge teilen", "Split into entries at the cut"));
-        let tip = tr!(
-            "Was vor dem Anfang und nach dem Ende liegt, wird je ein eigener Eintrag davor und dahinter. Aus einem Titel mit beiden Marken werden so drei Einträge.",
-            "What lies before the start and after the end becomes a separate entry before and after it. A title with both markers becomes three entries."
-        );
-        if ui.add_enabled_ui(trimmed, |ui| soft_button(ui, &p, &label)).inner.on_hover_text(tip).on_disabled_hover_text(tr!("Erst Anfang oder Ende setzen", "Set a start or end marker first")).clicked() {
-            self.split_at_cut(disc, i);
-            return;
-        }
         let scenes = soft_button(ui, &p, &format!("{}  {}", ic::FILM_STRIP, tr!("Szenen erkennen …", "Detect scenes …")))
             .on_hover_text(tr!("Teilt den Eintrag an Szenenwechseln in einzelne Einträge", "Splits the entry into separate entries at scene changes"));
         if scenes.clicked() {
@@ -1441,7 +1443,7 @@ impl App {
     /// Kapitel-Editor: eigene Kapitelmarken setzen, verschieben, verteilen oder entfernen.
     fn view_chapter_marks(&mut self, ui: &mut Ui, disc: &Disc, i: usize) {
         let p = self.pal;
-        let now = self.preview.current_ms();
+        let now = self.marker_time(i);
         if i >= self.plan.reauthor.len() {
             return;
         }
@@ -1482,7 +1484,8 @@ impl App {
             let n = e.last_chapter + 1 - e.first_chapter.min(e.last_chapter);
             let text = if n == 1 { tr!("Die DVD hat hier 1 Kapitel.", "The DVD has 1 chapter here.").to_string() } else { trf!("Die {n} Kapitel der DVD werden übernommen.", "The DVD's {n} chapters are kept.") };
             ui.label(RichText::new(text).size(13.0).color(p.muted));
-            ui.horizontal(|ui| {
+            // Umbrechen statt rechts abschneiden, wenn die Spalte schmal ist
+            ui.horizontal_wrapped(|ui| {
                 if ui
                     .button(RichText::new(trf!("{}  Kapitel bearbeiten", "{}  Edit chapters", ic::PENCIL_SIMPLE)).size(13.0))
                     .on_hover_text(tr!("Übernimmt die Kapitel der DVD als Marken, die du dann ändern kannst", "Takes over the DVD's chapters as markers that you can then change"))
@@ -1501,6 +1504,7 @@ impl App {
                     self.plan.reauthor[i].chapter_marks = Some(m);
                 }
             });
+            self.chapter_split_button(ui, disc, i);
             ui.add_space(4.0);
             return;
         };
@@ -1510,8 +1514,8 @@ impl App {
         let mut seek = None;
         let row = |ui: &mut Ui, n: usize, at: u64, outside: bool| {
             let color = if outside { p.faint } else { p.text };
-            ui.add_sized([22.0, 22.0], egui::Label::new(RichText::new(format!("{n}.")).color(p.muted)));
-            let r = ui.add_sized([82.0, 22.0], egui::Label::new(RichText::new(fmt_time_precise(at)).family(semibold()).color(color)));
+            ui.add_sized([20.0, 22.0], egui::Label::new(RichText::new(format!("{n}.")).color(p.muted)));
+            let r = ui.add_sized([78.0, 22.0], egui::Label::new(RichText::new(fmt_time_precise(at)).family(semibold()).color(color)));
             if outside {
                 r.on_hover_text(tr!("Liegt nicht im geschnittenen Bereich und entfällt in der neuen DVD", "Outside the cut range; dropped in the new DVD"));
             }
@@ -1522,13 +1526,14 @@ impl App {
                 .fill(Color32::TRANSPARENT)
                 .stroke(Stroke::NONE)
                 .corner_radius(CornerRadius::same(6))
-                .min_size(Vec2::new(24.0, 24.0));
+                .min_size(Vec2::new(22.0, 24.0));
             ui.add(b).on_hover_text(tip).clicked()
         };
         egui::Frame::new().fill(p.raised).corner_radius(CornerRadius::same(8)).inner_margin(Margin::symmetric(8, 4)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 0.0;
             ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
                 row(ui, 1, cut_a, false);
                 ui.label(RichText::new(tr!("Anfang", "Start")).size(12.5).color(p.muted));
             });
@@ -1537,6 +1542,7 @@ impl App {
             for (k, m) in marks.iter().enumerate() {
                 let outside = *m <= cut_a || *m >= cut_b;
                 ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
                     row(ui, k + 2, *m, outside);
                     ui.spacing_mut().item_spacing.x = 0.0;
                     if mini(ui, ic::ARROW_LINE_RIGHT, tr!("In der Vorschau zu dieser Marke springen", "Jump to this marker in the preview")) {
@@ -1548,10 +1554,9 @@ impl App {
                     if mini(ui, ic::CARET_RIGHT, tr!("Eine Sekunde später", "One second later")) {
                         nudge = Some((k, 1000));
                     }
-                    if let Some(t) = now {
-                        if mini(ui, ic::MAP_PIN, tr!("Auf die Stelle der Vorschau setzen", "Set to the preview position")) {
-                            nudge = Some((k, t as i64 - *m as i64));
-                        }
+                    let pin = ui.add_enabled_ui(now.is_some(), |ui| mini(ui, ic::MAP_PIN, tr!("Auf die Stelle der Vorschau setzen", "Set to the preview position"))).inner;
+                    if let (true, Some(t)) = (pin, now) {
+                        nudge = Some((k, t as i64 - *m as i64));
                     }
                     if mini(ui, ic::X, tr!("Marke entfernen", "Remove marker")) {
                         remove = Some(k);
@@ -1571,7 +1576,7 @@ impl App {
             }
         });
         ui.add_space(4.0);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let b = ui
                 .add_enabled(now.is_some(), egui::Button::new(RichText::new(trf!("{}  Marke hier", "{}  Marker here", ic::PLUS)).size(13.0)))
                 .on_hover_text(tr!("Setzt eine Kapitelmarke an das Bild, das die Vorschau gerade zeigt", "Sets a chapter marker at the frame the preview is showing"));
@@ -1592,7 +1597,7 @@ impl App {
         if self.plan.reauthor[i].chapter_marks.is_none() {
             return;
         }
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new(tr!("Alle", "Every")).color(p.muted));
             ui.add(egui::DragValue::new(&mut self.prefs.chapter_every_min).range(1..=60).suffix(tr!(" Min.", " min")));
             if ui
@@ -1626,7 +1631,33 @@ impl App {
             self.preview.pause();
             self.preview.seek_time(t as f64, true);
         }
+        self.chapter_split_button(ui, disc, i);
         ui.add_space(4.0);
+    }
+
+    /// Knopf "An Kapiteln in Einträge teilen" unter den Kapitelmarken.
+    fn chapter_split_button(&mut self, ui: &mut Ui, disc: &Disc, i: usize) {
+        let p = self.pal;
+        let Some(e) = self.plan.reauthor.get(i) else { return };
+        let n = Self::chapter_split_points(disc, e).len() + 1;
+        let label = if n > 1 {
+            trf!("{}  An Kapiteln in {n} Einträge teilen", "{}  Split into {n} entries at chapters", ic::SCISSORS)
+        } else {
+            trf!("{}  An Kapiteln in Einträge teilen", "{}  Split into entries at chapters", ic::SCISSORS)
+        };
+        ui.add_space(2.0);
+        let r = ui
+            .add_enabled_ui(n > 1, |ui| soft_button(ui, &p, &label))
+            .inner
+            .on_hover_text(tr!(
+                "Ersetzt diesen Eintrag durch je einen Eintrag pro Kapitel im geschnittenen Bereich, mit deinen Kapitelmarken oder sonst denen der DVD",
+                "Replaces this entry with one entry per chapter within the cut range, using your chapter markers or else the DVD's"
+            ))
+            .on_disabled_hover_text(tr!("Im geschnittenen Bereich beginnt kein weiteres Kapitel. Setze erst Kapitelmarken.", "No further chapter starts within the cut range. Set chapter markers first."));
+        if r.clicked() {
+            let n = self.split_at_chapters(disc, i);
+            self.notice = Some((trf!("In {n} Einträge geteilt", "Split into {n} entries"), std::time::Instant::now()));
+        }
     }
 
     fn view_capacity(&mut self, ui: &mut Ui, est: &Estimate) {

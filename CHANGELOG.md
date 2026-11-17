@@ -2,6 +2,13 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.041 · 2026-11-17 10:18
+
+- Behoben: „Neu: Marke hier“ war bei schmalerem Fenster nicht zu sehen. Einige Zeilen im Bereich rechts waren breiter als die Spalte, dadurch ragte die ganze Spalte aus dem Fenster und Knöpfe am rechten Rand wurden abgeschnitten. Die Zeilen für Schnitt und Kapitelmarken sind jetzt kompakter, und Knopfreihen brechen um, statt abgeschnitten zu werden.
+- „Marke hier“ und die Marken-Knöpfe beim Schnitt sind jetzt auch nutzbar, während das nächste Vorschaubild noch lädt (nach einem Sprung oder Neuladen). Sie nehmen dann die angesteuerte Stelle. Der Knopf „Auf die Stelle der Vorschau setzen“ in der Markenliste bleibt immer sichtbar und ist höchstens ausgegraut.
+- Neu: „An Kapiteln in Einträge teilen“ unter den Kapitelmarken und im Kontextmenü der Liste. Der Eintrag wird an jedem Kapitelanfang im geschnittenen Bereich geteilt, mit deinen eigenen Kapitelmarken oder sonst den Kapiteln der DVD. Schnitt und Einstellungen bleiben erhalten. Die Einblende bekommt der erste Teil, die Ausblende der letzte, und ein eigener Name wird durchnummeriert („Name – Teil 1“ …).
+- Entfernt: „Am Schnitt in Einträge teilen“ und „In … Einzeltitel zerlegen“. Beides geht jetzt über „An Kapiteln in Einträge teilen“.
+
 ## 1.0.040 · 2026-11-16 17:06
 
 - Neu: „Am Schnitt in Einträge teilen“ im Bereich Schnitt und im Kontextmenü der Liste. Was vor der Anfangsmarke und nach der Endmarke liegt, wird je ein eigener Eintrag davor und dahinter. Aus einem Titel mit beiden Marken werden so drei Einträge. Der mittlere behält Schnitt, Namen, Blenden und Kapitelmarken und bleibt ausgewählt. Ist nur eine Marke gesetzt, entstehen zwei Einträge.

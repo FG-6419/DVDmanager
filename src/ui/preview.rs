@@ -1109,6 +1109,16 @@ impl App {
         }
     }
 
+    /// Stelle der Vorschau für Marken von Eintrag `i`: das gezeigte Bild oder, solange das
+    /// nächste Bild noch lädt (nach einem Sprung oder Neuladen), die angesteuerte Stelle.
+    pub(super) fn marker_time(&self, i: usize) -> Option<u64> {
+        let st = &self.preview;
+        if st.loaded != Some(Selection::Entry(i)) || st.handle.is_none() || st.total_ms == 0 {
+            return None;
+        }
+        st.time_ms.map(|t| t.min(st.total_ms))
+    }
+
     /// Abschnitte für "Alle Schnitte" aus der Liste der neuen DVD.
     pub(super) fn update_program(&mut self) {
         let Some(disc) = self.disc.clone() else { return };

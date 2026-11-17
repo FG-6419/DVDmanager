@@ -982,6 +982,17 @@ impl App {
             return;
         }
         self.frames += 1;
+        // Nur für Prüfbilder: Fenstergröße vorgeben (DISCSLIM_SIZE=BreitexHöhe)
+        #[cfg(debug_assertions)]
+        if self.frames == 1 {
+            if let Some((w, h)) = std::env::var("DISCSLIM_SIZE").ok().and_then(|s| {
+                let (w, h) = s.split_once('x')?;
+                Some((w.parse::<f32>().ok()?, h.parse::<f32>().ok()?))
+            }) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
+            }
+        }
         #[cfg(debug_assertions)]
         self.apply_dev_state(ctx);
         // Bei der Zeitleiste länger warten, bis die Standbilder da sind
@@ -1228,18 +1239,32 @@ impl App {
                     let _ = std::fs::write(log, out);
                 }
             }
-            // Am Schnitt teilen: Titel 1 mit Marken bei 10 s und 20 s wird zu drei Einträgen
-            ("cutsplit", 5) => {
+            // An Kapiteln teilen: Titel 1 (geschnitten 5 s bis 60 s) mit eigenen Marken bei
+            // 3 s (außerhalb), 20 s und 40 s; DISCSLIM_SPLIT=dvd: mit den Kapiteln der DVD.
+            // Bild 5 zeigt den Eintrag vor dem Teilen, Bild 60 teilt und protokolliert.
+            ("chsplit", 5) => {
                 self.plan.mode = Mode::Reauthor;
                 if let Some(d) = self.disc.clone() {
                     let mut e = discslim::engine::plan::ReauthorEntry::new(0, 0, d.titles[0].chapters.len().saturating_sub(1), Default::default());
-                    e.cut = discslim::engine::plan::Cut { start_ms: Some(10_000), end_ms: Some(20_000), exact: true };
-                    e.name = Some("Mitte".into());
+                    e.cut = discslim::engine::plan::Cut { start_ms: Some(5_000), end_ms: Some(60_000), exact: true };
+                    e.name = Some("Film".into());
+                    e.fade.fade_in = discslim::engine::plan::FadeKind::Black;
+                    e.fade.fade_out = discslim::engine::plan::FadeKind::White;
+                    if std::env::var("DISCSLIM_SPLIT").as_deref() != Ok("dvd") {
+                        e.chapter_marks = Some(vec![3_000, 20_000, 40_000]);
+                    }
                     self.plan.reauthor.push(e);
-                    self.split_at_cut(&d, 0);
-                    let line: Vec<String> = self.plan.reauthor.iter().map(|e| format!("{:?}-{:?} {:?}", e.cut.start_ms, e.cut.end_ms, e.name)).collect();
+                }
+                self.sel = Selection::Entry(0);
+                self.preview.dirty = true;
+            }
+            ("chsplit", 60) if std::env::var("DISCSLIM_SPLIT").as_deref() != Ok("show") => {
+                if let Some(d) = self.disc.clone() {
+                    let n = self.split_at_chapters(&d, 0);
+                    let line: Vec<String> =
+                        self.plan.reauthor.iter().map(|e| format!("{:?}-{:?} {:?} {:?}/{:?}", e.cut.start_ms, e.cut.end_ms, e.name, e.fade.fade_in, e.fade.fade_out)).collect();
                     if let Ok(log) = std::env::var("DISCSLIM_DEV_LOG") {
-                        let _ = std::fs::write(log, format!("{line:?} gewählt {:?}\n", self.sel));
+                        let _ = std::fs::write(log, format!("{n} Teile: {line:#?}\ngewählt {:?}\n", self.sel));
                     }
                 }
             }
