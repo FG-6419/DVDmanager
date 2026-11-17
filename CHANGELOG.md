@@ -2,6 +2,10 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.044 · 2026-11-17 11:23
+
+- Zoombare Zeitleiste bei „Alle Schnitte“: Sie zeigt jetzt alle Einträge der neuen DVD hintereinander, mit Standbildern, Tonspur und einer Zeitskala über die ganze Länge, so wie die schmale Leiste. Bisher zeigte sie wie bei „Nur Schnitt“ nur den gerade laufenden Eintrag. Grüne Linien markieren die Übergänge zwischen den Einträgen, ein farbiger Streifen den laufenden Eintrag. Klicken springt an die Stelle, auch in einen anderen Eintrag. Beim Darüberfahren steht der Eintrag dabei. Das Kontextmenü setzt Schnittmarken im Eintrag unter dem Zeiger.
+
 ## 1.0.043 · 2026-11-17 10:46
 
 - Vorschau-Ton ohne Knacken: Die Zeit jedes Tonstücks wird je Bildgruppe aus der Zellzeit der DVD abgeleitet, und die ist nur bildgenau (bei NTSC zusätzlich gerundet). Weicht sie um ein paar Millisekunden ab, schob die Vorschau eine winzige Stille ein oder übersprang Abtastwerte, was als Knacken zu hören war. Stücke, die bis auf 45 ms an das vorige anschließen, laufen jetzt nahtlos weiter. Echte Sprünge (Schnitte, Springen in der Zeitleiste) bleiben Sprünge. Die Ausgabe war davon nie betroffen.

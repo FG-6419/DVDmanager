@@ -80,6 +80,8 @@ pub struct PreviewState {
     pub listen_until: Option<(usize, f64, Instant)>,
     /// Rundgang durch alle Schnitte: noch anzuhörende Stellen (siehe `Listen`)
     pub cut_tour: std::collections::VecDeque<Listen>,
+    /// Abschnitte der Zeitleiste bei "Alle Schnitte" samt Schlüssel, aus dem sie entstanden
+    strip_clips: Option<(Vec<(usize, u64, u64, u64)>, Vec<StripClip>)>,
     /// Zoombare Zeitleiste mit Standbildern
     pub strip: Strip,
 }
@@ -602,8 +604,28 @@ fn tile_step(min_ms: f64, frame_ms: f64) -> f64 {
     step
 }
 
+/// Ein Abschnitt der zoombaren Zeitleiste: ab `off` (Zeit auf der Leiste) der Bereich
+/// `a..b` (Titelzeit) der Quelle `tag`. Ohne "Alle Schnitte" gibt es genau einen mit
+/// `off == a`; mit "Alle Schnitte" stehen alle Einträge hintereinander.
+#[derive(Clone)]
+pub struct StripClip {
+    pub off: f64,
+    pub a: f64,
+    pub b: f64,
+    pub tag: u64,
+    pub segments: Vec<Segment>,
+    pub entry: Option<usize>,
+    pub track: Option<TrackChoice>,
+}
+
+/// Abschnitt an der Stelle `g` der Leiste.
+fn clip_at(clips: &[StripClip], g: f64) -> usize {
+    clips.iter().rposition(|c| c.off <= g).unwrap_or(0)
+}
+
 /// Zoombare Zeitleiste: Werkzeugzeile, Zeitskala, Standbilder und Rollbalken.
 /// `cut`: Schnittmarken des gezeigten Eintrags, `entry`: Eintrag für das Kontextmenü.
+/// `program`: bei "Alle Schnitte" die Abschnitte aller Einträge (sonst nur der gezeigte).
 #[allow(clippy::too_many_arguments)]
 fn view_strip(
     st: &mut PreviewState,
@@ -615,6 +637,7 @@ fn view_strip(
     cut_action: &mut Option<(usize, bool, u64)>,
     wave: &mut bool,
     track: Option<TrackChoice>,
+    program: Option<Vec<StripClip>>,
 ) {
     let ctx = ui.ctx().clone();
     if st.strip.thumbs.is_none() {
@@ -623,12 +646,29 @@ fn view_strip(
     if let Some(t) = st.strip.thumbs.as_mut() {
         t.pump(&ctx);
     }
-    let (lo, hi) = st.range();
     let fl = st.frame_len();
-    let pos = st.current_f();
     let active = st.playing || st.scrub != 0;
-    let enabled = !st.segments.is_empty() && st.total_ms > 0;
     let aspect = if st.aspect > 0.1 { st.aspect } else { 16.0 / 9.0 };
+    // Abschnitte und Zeit auf der Leiste
+    let prog_mode = program.as_ref().is_some_and(|c| !c.is_empty()) && st.program;
+    let (clips, lo, hi, pos) = match program.filter(|_| prog_mode) {
+        Some(clips) => {
+            let total = clips.last().map(|c| c.off + (c.b - c.a)).unwrap_or(1.0).max(1.0);
+            let pos = st.prog_position();
+            (clips, 0.0, total, pos)
+        }
+        None => {
+            let (lo, hi) = st.range();
+            let one = StripClip { off: lo, a: lo, b: hi, tag: st.strip.tag, segments: st.segments.clone(), entry, track };
+            (vec![one], lo, hi, st.current_f())
+        }
+    };
+    let local = |g: f64| -> (usize, f64) {
+        let k = clip_at(&clips, g);
+        (k, clips[k].a + (g - clips[k].off))
+    };
+    // Bei "Alle Schnitte" auch, während der nächste Eintrag lädt
+    let enabled = prog_mode || (!st.segments.is_empty() && st.total_ms > 0);
     let width = ui.available_width().max(60.0);
     let full = ((hi - lo) / f64::from(width)).max(0.01);
     // Feinste Stufe: ein Bild etwa 30 Bildpunkte breit
@@ -746,60 +786,74 @@ fn view_strip(
 
     // Tonspur: Spitzenpegel je Bildpunktspalte, gespiegelt um die Mittellinie
     if *wave {
-        let wave_data = match (enabled, source, track) {
-            (true, Some(src), Some(tr)) => {
-                let key = (s.tag, tr.phys);
-                if !s.waves.iter().any(|w| w.key == key) {
-                    s.waves.push(Wave::start(key, src.clone(), st.segments.clone(), tr, ctx.clone()));
-                    if s.waves.len() > 3 {
-                        s.waves.remove(0);
+        let mut datas = Vec::with_capacity(clips.len());
+        for c in &clips {
+            let d = match (enabled, source, c.track) {
+                (true, Some(src), Some(tr)) => {
+                    let key = (c.tag, tr.phys);
+                    if !s.waves.iter().any(|w| w.key == key) {
+                        s.waves.push(Wave::start(key, src.clone(), c.segments.clone(), tr, ctx.clone()));
+                        while s.waves.len() > clips.len().max(3) {
+                            s.waves.remove(0);
+                        }
                     }
+                    s.waves.iter().find(|w| w.key == key).map(|w| w.data.clone())
                 }
-                s.waves.iter().find(|w| w.key == key).map(|w| w.data.clone())
-            }
-            _ => None,
-        };
+                _ => None,
+            };
+            datas.push(d);
+        }
         let mid = wave_r.center().y;
         let half = wave_r.height() / 2.0;
         painter.line_segment([egui::pos2(area.left(), mid), egui::pos2(area.right(), mid)], egui::Stroke::new(1.0, p.track));
         let mut note = None;
-        match wave_data.as_ref().and_then(|d| d.lock().ok()) {
-            Some(g) => {
-                // Linear und auf den lautesten Ausschlag des Titels bezogen: außen hell der
-                // Spitzenpegel, innen kräftig der mittlere Pegel (zeigt, wie laut es wirklich ist)
-                let n = g.levels.peak.len().min(g.levels.rms.len());
-                let scale = half / f32::from(g.top.max(1_000));
-                let soft = p.audio.gamma_multiply(0.45);
-                let mut x = area.left();
-                while x < area.right() && n > 0 {
-                    let ta = view_lo + f64::from(x - area.left()) * mpp;
-                    let tb = ta + mpp;
-                    if ta > g.done_ms && !g.finished {
-                        break;
-                    }
-                    let a = ((ta / discslim::engine::preview::PEAK_MS).floor().max(0.0) as usize).min(n - 1);
-                    let b = ((tb / discslim::engine::preview::PEAK_MS).ceil() as usize).clamp(a + 1, n);
-                    let pk = g.levels.peak[a..b].iter().copied().max().unwrap_or(0);
-                    let ms: f32 = g.levels.rms[a..b].iter().map(|v| f32::from(*v).powi(2)).sum::<f32>() / (b - a) as f32;
-                    let hp = (f32::from(pk) * scale).min(half);
-                    let hr = (ms.sqrt() * scale).min(hp);
-                    if hp >= 0.5 {
-                        painter.line_segment([egui::pos2(x + 0.5, mid - hp), egui::pos2(x + 0.5, mid + hp)], egui::Stroke::new(1.0, soft));
-                    }
-                    if hr >= 0.5 {
-                        painter.line_segment([egui::pos2(x + 0.5, mid - hr), egui::pos2(x + 0.5, mid + hr)], egui::Stroke::new(1.0, p.audio));
-                    }
-                    x += 1.0;
-                }
-                if g.failed {
-                    note = Some(tr!("Ton dieser Spur lässt sich nicht lesen", "This audio track cannot be read").to_string());
-                } else if !g.finished {
-                    let total = (st.total_ms as f64).max(1.0);
-                    note = Some(trf!("Ton wird gelesen … {} %", "Reading audio … {} %", ((g.done_ms / total) * 100.0).clamp(0.0, 99.0) as u32));
-                }
+        let soft = p.audio.gamma_multiply(0.45);
+        // Lauteste Stelle über alle gezeigten Abschnitte, damit die Höhen vergleichbar sind
+        let top = datas.iter().flatten().filter_map(|d| d.lock().ok().map(|g| g.top)).max().unwrap_or(0);
+        let scale = half / f32::from(top.max(1_000));
+        for (k, c) in clips.iter().enumerate() {
+            let x0 = x_of(c.off).max(area.left());
+            let x1 = x_of(c.off + (c.b - c.a)).min(area.right());
+            if x1 <= x0 {
+                continue;
             }
-            None if enabled => note = Some(tr!("Keine Tonspur", "No audio track").to_string()),
-            None => {}
+            match datas[k].as_ref().and_then(|d| d.lock().ok()) {
+                Some(g) => {
+                    // Linear: außen hell der Spitzenpegel, innen kräftig der mittlere Pegel
+                    let n = g.levels.peak.len().min(g.levels.rms.len());
+                    let mut x = x0;
+                    while x < x1 && n > 0 {
+                        let ta = c.a + (t_of(x) - c.off);
+                        let tb = ta + mpp;
+                        if ta > g.done_ms && !g.finished {
+                            break;
+                        }
+                        let a = ((ta / discslim::engine::preview::PEAK_MS).floor().max(0.0) as usize).min(n - 1);
+                        let b = ((tb / discslim::engine::preview::PEAK_MS).ceil() as usize).clamp(a + 1, n);
+                        let pk = g.levels.peak[a..b].iter().copied().max().unwrap_or(0);
+                        let ms: f32 = g.levels.rms[a..b].iter().map(|v| f32::from(*v).powi(2)).sum::<f32>() / (b - a) as f32;
+                        let hp = (f32::from(pk) * scale).min(half);
+                        let hr = (ms.sqrt() * scale).min(hp);
+                        if hp >= 0.5 {
+                            painter.line_segment([egui::pos2(x + 0.5, mid - hp), egui::pos2(x + 0.5, mid + hp)], egui::Stroke::new(1.0, soft));
+                        }
+                        if hr >= 0.5 {
+                            painter.line_segment([egui::pos2(x + 0.5, mid - hr), egui::pos2(x + 0.5, mid + hr)], egui::Stroke::new(1.0, p.audio));
+                        }
+                        x += 1.0;
+                    }
+                    if note.is_none() {
+                        if g.failed {
+                            note = Some(tr!("Ton dieser Spur lässt sich nicht lesen", "This audio track cannot be read").to_string());
+                        } else if !g.finished {
+                            let total = c.segments.iter().map(|s| s.ms as f64).sum::<f64>().max(1.0);
+                            note = Some(trf!("Ton wird gelesen … {} %", "Reading audio … {} %", ((g.done_ms / total) * 100.0).clamp(0.0, 99.0) as u32));
+                        }
+                    }
+                }
+                None if enabled && note.is_none() => note = Some(tr!("Keine Tonspur", "No audio track").to_string()),
+                None => {}
+            }
         }
         if let Some(text) = note {
             painter.text(egui::pos2(wave_r.right() - 8.0, mid), Align2::RIGHT_CENTER, text, FontId::proportional(11.5), p.muted);
@@ -816,14 +870,16 @@ fn view_strip(
         let exact = step < 1_500.0;
         let first = ((view_lo / tile_ms).floor() as i64).max(0);
         let last = ((view_lo + span) / tile_ms).ceil() as i64;
-        let tag = s.tag;
-        let mut keys = Vec::new();
+        // (Stelle auf der Leiste, Bild)
+        let mut keys: Vec<(f64, super::thumbs::StripKey)> = Vec::new();
         for k in first..=last {
             let t = k as f64 * tile_ms;
             if t >= hi {
                 break;
             }
-            let snapped = (t / step).floor() * step;
+            let (ci, lt) = local(t);
+            let tag = clips[ci].tag;
+            let snapped = (lt / step).floor() * step;
             let key: super::thumbs::StripKey = (tag, snapped.round() as u64, exact);
             let r = Rect::from_min_size(egui::pos2(x_of(t), thumbs_r.top()), Vec2::new(tile_w, thumbs_r.height()));
             let uv = Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
@@ -841,20 +897,22 @@ fn view_strip(
                             painter.rect_filled(r.shrink(1.0), CornerRadius::same(2), p.track);
                         }
                     }
-                    keys.push(key);
+                    keys.push((t, key));
                 }
             }
             painter.line_segment([egui::pos2(r.left(), r.top()), egui::pos2(r.left(), r.bottom())], egui::Stroke::new(1.0, p.screen));
         }
         // Zuerst die Bilder nahe der Abspielposition (bzw. der Mitte)
         let focus = if pos >= view_lo && pos <= view_lo + span { pos } else { view_lo + span / 2.0 };
-        keys.sort_by(|a, b| {
-            let da = (a.1 as f64 - focus).abs();
-            let db = (b.1 as f64 - focus).abs();
-            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        keys.sort_by(|a, b| (a.0 - focus).abs().partial_cmp(&(b.0 - focus).abs()).unwrap_or(std::cmp::Ordering::Equal));
         if let (Some(th), Some(src)) = (s.thumbs.as_mut(), source) {
-            th.request(tag, src, &st.segments, keys);
+            let mut sources: Vec<(u64, &[Segment])> = Vec::new();
+            for c in &clips {
+                if !sources.iter().any(|x| x.0 == c.tag) {
+                    sources.push((c.tag, &c.segments));
+                }
+            }
+            th.request(src, &sources, keys.into_iter().map(|k| k.1).collect());
         }
     }
 
@@ -875,34 +933,54 @@ fn view_strip(
         }
     }
 
-    // Weggeschnittenes abdunkeln, Schnitt- und Kapitelmarken
-    if st.window.is_none() && (cut.0.is_some() || cut.1.is_some()) {
-        let a = cut.0.map(|v| v as f64).unwrap_or(lo);
-        let b = cut.1.map(|v| (v as f64).min(hi)).unwrap_or(hi);
-        let shade = Color32::from_black_alpha(150);
-        if a > view_lo {
-            painter.rect_filled(Rect::from_min_max(egui::pos2(area.left(), thumbs_r.top()), egui::pos2(x_of(a), area.bottom() - 2.0)), CornerRadius::ZERO, shade);
+    if prog_mode {
+        // "Alle Schnitte": Übergänge zwischen den Einträgen und der laufende Eintrag
+        if let Some(c) = clips.get(st.prog_cur) {
+            let (xa, xb) = (x_of(c.off).max(area.left()), x_of(c.off + (c.b - c.a)).min(area.right()));
+            if xb > xa {
+                painter.rect_filled(
+                    Rect::from_min_max(egui::pos2(xa, thumbs_r.bottom() - 3.0), egui::pos2(xb, thumbs_r.bottom())),
+                    CornerRadius::ZERO,
+                    p.accent,
+                );
+            }
         }
-        if b < view_lo + span {
-            painter.rect_filled(Rect::from_min_max(egui::pos2(x_of(b), thumbs_r.top()), egui::pos2(area.right(), area.bottom() - 2.0)), CornerRadius::ZERO, shade);
+        for c in clips.iter().skip(1) {
+            if c.off > view_lo && c.off < view_lo + span {
+                let x = x_of(c.off);
+                painter.line_segment([egui::pos2(x, ruler.top()), egui::pos2(x, area.bottom())], egui::Stroke::new(2.0, p.good));
+            }
         }
-    }
-    for (ms, _) in &st.chapters {
-        let t = *ms as f64;
-        if t > view_lo && t < view_lo + span {
-            let x = x_of(t);
-            painter.line_segment([egui::pos2(x, ruler.top()), egui::pos2(x, area.bottom())], egui::Stroke::new(1.5, p.subs));
+    } else {
+        // Weggeschnittenes abdunkeln, Schnitt- und Kapitelmarken
+        if st.window.is_none() && (cut.0.is_some() || cut.1.is_some()) {
+            let a = cut.0.map(|v| v as f64).unwrap_or(lo);
+            let b = cut.1.map(|v| (v as f64).min(hi)).unwrap_or(hi);
+            let shade = Color32::from_black_alpha(150);
+            if a > view_lo {
+                painter.rect_filled(Rect::from_min_max(egui::pos2(area.left(), thumbs_r.top()), egui::pos2(x_of(a), area.bottom() - 2.0)), CornerRadius::ZERO, shade);
+            }
+            if b < view_lo + span {
+                painter.rect_filled(Rect::from_min_max(egui::pos2(x_of(b), thumbs_r.top()), egui::pos2(area.right(), area.bottom() - 2.0)), CornerRadius::ZERO, shade);
+            }
         }
-    }
-    for (t, open) in [(cut.0, true), (cut.1, false)] {
-        let Some(t) = t.map(|v| v as f64) else { continue };
-        if t >= view_lo && t <= view_lo + span {
-            let x = x_of(t);
-            painter.line_segment([egui::pos2(x, ruler.top()), egui::pos2(x, area.bottom())], egui::Stroke::new(2.0, p.good));
-            // Klammer zeigt zur behaltenen Seite
-            let dir = if open { 6.0 } else { -6.0 };
-            for y in [thumbs_r.top() + 1.0, thumbs_r.bottom() - 1.0] {
-                painter.line_segment([egui::pos2(x, y), egui::pos2(x + dir, y)], egui::Stroke::new(2.0, p.good));
+        for (ms, _) in &st.chapters {
+            let t = *ms as f64;
+            if t > view_lo && t < view_lo + span {
+                let x = x_of(t);
+                painter.line_segment([egui::pos2(x, ruler.top()), egui::pos2(x, area.bottom())], egui::Stroke::new(1.5, p.subs));
+            }
+        }
+        for (t, open) in [(cut.0, true), (cut.1, false)] {
+            let Some(t) = t.map(|v| v as f64) else { continue };
+            if t >= view_lo && t <= view_lo + span {
+                let x = x_of(t);
+                painter.line_segment([egui::pos2(x, ruler.top()), egui::pos2(x, area.bottom())], egui::Stroke::new(2.0, p.good));
+                // Klammer zeigt zur behaltenen Seite
+                let dir = if open { 6.0 } else { -6.0 };
+                for y in [thumbs_r.top() + 1.0, thumbs_r.bottom() - 1.0] {
+                    painter.line_segment([egui::pos2(x, y), egui::pos2(x + dir, y)], egui::Stroke::new(2.0, p.good));
+                }
             }
         }
     }
@@ -946,7 +1024,12 @@ fn view_strip(
     if resp.secondary_clicked() {
         s.ctx_ms = resp.interact_pointer_pos().map(|pp| t_of(pp.x).clamp(lo, hi));
     }
-    if let (Some(e), Some(at)) = (entry, s.ctx_ms) {
+    // Kontextmenü: Schnittmarke im Eintrag unter dem Zeiger setzen
+    let ctx_target = s.ctx_ms.and_then(|g| {
+        let (k, lt) = local(g);
+        clips[k].entry.map(|e| (e, lt))
+    });
+    if let Some((e, at)) = ctx_target {
         resp.context_menu(|ui| {
             ui.label(RichText::new(trf!("Eintrag {} · {}", "Entry {} · {}", e + 1, super::views::fmt_time_precise(at as u64))).size(12.5).color(p.muted));
             if ui.button(trf!("{}  Schnittanfang hier setzen", "{}  Set cut start here", ic::BRACKETS_SQUARE)).clicked() {
@@ -960,10 +1043,15 @@ fn view_strip(
         });
     }
     if let Some(t) = hover_t.filter(|_| s.drag.is_none()) {
-        let name = st_chapter_name(&st.chapters, t);
-        let text = match name {
-            Some(n) => format!("{n} · {}", super::views::fmt_time_precise(t as u64)),
-            None => super::views::fmt_time_precise(t as u64),
+        let text = if prog_mode {
+            let (k, _) = local(t);
+            let e = clips[k].entry.map(|e| e + 1).unwrap_or(k + 1);
+            trf!("Eintrag {} · {}", "Entry {} · {}", e, super::views::fmt_time_precise(t as u64))
+        } else {
+            match st_chapter_name(&st.chapters, t) {
+                Some(n) => format!("{n} · {}", super::views::fmt_time_precise(t as u64)),
+                None => super::views::fmt_time_precise(t as u64),
+            }
         };
         resp.clone().on_hover_text_at_pointer(text);
     }
@@ -995,18 +1083,25 @@ fn view_strip(
 
     // Sprünge erst jetzt, da sie die ganze Vorschau brauchen
     if let Some(t) = live_seek {
+        let (k, lt) = local(t);
         let ready = !st.want_frame || st.strip.drag_live.is_none_or(|(_, at)| at.elapsed().as_millis() > 300);
         let moved = st.strip.drag_live.is_none_or(|(last, _)| (last - t).abs() > 20.0);
-        if ready && moved {
+        // Beim Ziehen nur innerhalb des geladenen Eintrags mitspringen; der Wechsel kommt beim Loslassen
+        if ready && moved && (!prog_mode || k == st.prog_cur) {
             // Fein gezoomt gleich bildgenau, sonst schnell am Schlüsselbild
             let exact = st.step_exact && mpp * 30.0 < 2_000.0;
-            st.seek_time(t, exact);
+            st.seek_time(lt, exact);
             st.strip.drag_live = Some((t, Instant::now()));
         }
     }
     if let Some(t) = final_seek {
-        let exact = st.step_exact;
-        st.seek_time(t, exact);
+        let (k, lt) = local(t);
+        if prog_mode {
+            st.prog_goto(k, lt);
+        } else {
+            let exact = st.step_exact;
+            st.seek_time(lt, exact);
+        }
     }
 }
 
@@ -1143,7 +1238,57 @@ impl App {
 
     /// Tonspur für die Vorschau: die erste ausgewählte Spur des Titels.
     fn preview_track(&self, disc: &Disc) -> Option<TrackChoice> {
-        let (title, settings) = match self.preview_sel() {
+        self.track_for(disc, self.preview_sel())
+    }
+
+    /// Abschnitte aller Einträge für die zoombare Zeitleiste bei "Alle Schnitte".
+    /// Wird nur neu berechnet, wenn sich Einträge oder Schnitte ändern.
+    fn strip_program(&mut self) -> Option<Vec<StripClip>> {
+        if !self.preview.program || self.preview.prog.is_empty() {
+            return None;
+        }
+        let disc = self.disc.clone()?;
+        let key: Vec<(usize, u64, u64, u64)> = self
+            .preview
+            .prog
+            .iter()
+            .filter_map(|c| {
+                let e = self.plan.reauthor.get(c.0)?;
+                let phys = self.track_for(&disc, Selection::Entry(c.0)).map_or(u64::MAX, |t| u64::from(t.phys));
+                Some((c.0, c.1.to_bits() ^ c.2.to_bits().rotate_left(17), strip_tag(0, e.title, e.first_chapter, e.last_chapter), phys))
+            })
+            .collect();
+        if let Some((k, clips)) = &self.preview.strip_clips {
+            if *k == key {
+                return Some(clips.clone());
+            }
+        }
+        let (offs, _) = self.preview.prog_offsets();
+        let clips: Vec<StripClip> = self
+            .preview
+            .prog
+            .iter()
+            .zip(offs)
+            .filter_map(|(c, off)| {
+                let e = self.plan.reauthor.get(c.0)?;
+                Some(StripClip {
+                    off,
+                    a: c.1,
+                    b: c.2,
+                    tag: strip_tag(0, e.title, e.first_chapter, e.last_chapter),
+                    segments: title_segments(&disc, e.title, e.first_chapter, e.last_chapter),
+                    entry: Some(c.0),
+                    track: self.track_for(&disc, Selection::Entry(c.0)),
+                })
+            })
+            .collect();
+        self.preview.strip_clips = Some((key, clips.clone()));
+        Some(clips)
+    }
+
+    /// Tonspur einer Auswahl: die erste ausgewählte Spur des Titels.
+    fn track_for(&self, disc: &Disc, sel: Selection) -> Option<TrackChoice> {
+        let (title, settings) = match sel {
             Selection::Item(ItemId::Title(i)) | Selection::Source(i) => (i, self.plan.settings(ItemId::Title(i))),
             Selection::Entry(i) => {
                 let e = self.plan.reauthor.get(i)?;
@@ -1483,6 +1628,7 @@ impl App {
             _ => (None, None),
         };
         let strip_entry = if let Selection::Entry(i) = sel { Some(i) } else { None };
+        let strip_program = if strip_open { self.strip_program() } else { None };
         let strip_source = self.disc.as_ref().map(|d| &d.source);
         let screen_h = (avail.y - controls_h).max(120.0);
         let (screen, _) = ui.allocate_exact_size(Vec2::new(avail.x, screen_h), Sense::hover());
@@ -1560,7 +1706,7 @@ impl App {
         ui.add_space(8.0);
         if strip_open {
             // Zoombare Zeitleiste mit Standbildern an Stelle der schmalen Leiste
-            view_strip(st, ui, &p, strip_source, strip_cut, strip_entry, &mut cut_action, &mut self.prefs.timeline_wave, strip_track);
+            view_strip(st, ui, &p, strip_source, strip_cut, strip_entry, &mut cut_action, &mut self.prefs.timeline_wave, strip_track, strip_program);
         } else {
             let width = ui.available_width();
             let (bar, resp) = ui.allocate_exact_size(Vec2::new(width, 18.0), Sense::click_and_drag());

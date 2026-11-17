@@ -175,8 +175,8 @@ pub type StripKey = (u64, u64, bool);
 
 #[derive(Default)]
 struct StripShared {
-    /// Quelle, für die gerade Bilder gebraucht werden
-    src: Option<(u64, Source, Vec<Segment>)>,
+    /// Quellen, für die gerade Bilder gebraucht werden (bei "Alle Schnitte" mehrere)
+    srcs: Vec<(u64, Source, Vec<Segment>)>,
     /// Noch fehlende Bilder, wichtigste zuerst
     want: Vec<StripKey>,
     /// Bild, an dem der Hintergrund-Thread gerade arbeitet
@@ -205,11 +205,12 @@ impl StripThumbs {
                 let (lock, cv) = &*sh;
                 let Ok(mut g) = lock.lock() else { return };
                 loop {
-                    let ready = g.src.as_ref().is_some_and(|s| g.want.first().is_some_and(|k| k.0 == s.0));
-                    if ready {
+                    // Bilder ohne bekannte Quelle entfallen
+                    let tags: Vec<u64> = g.srcs.iter().map(|s| s.0).collect();
+                    g.want.retain(|k| tags.contains(&k.0));
+                    if !g.want.is_empty() {
                         break;
                     }
-                    g.want.clear();
                     g = match cv.wait(g) {
                         Ok(g) => g,
                         Err(_) => return,
@@ -217,8 +218,8 @@ impl StripThumbs {
                 }
                 let key = g.want.remove(0);
                 g.busy = Some(key);
-                let (_, src, segs) = g.src.clone().expect("Quelle geprüft");
-                (key, src, segs)
+                let s = g.srcs.iter().find(|s| s.0 == key.0).expect("Quelle geprüft");
+                (key, s.1.clone(), s.2.clone())
             };
             let img = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| preview::still(&source, &segments, key.1 as f64, key.2)))
                 .ok()
@@ -268,11 +269,13 @@ impl StripThumbs {
     }
 
     /// Legt fest, welche Bilder gebraucht werden (wichtigste zuerst); ersetzt die vorige Liste.
-    pub fn request(&mut self, tag: u64, source: &Source, segments: &[Segment], keys: Vec<StripKey>) {
+    /// `sources`: Quelle (Kennung, Abschnitte) für jede Kennung, die in `keys` vorkommt.
+    pub fn request(&mut self, source: &Source, sources: &[(u64, &[Segment])], keys: Vec<StripKey>) {
         let (lock, cv) = &*self.shared;
         let Ok(mut g) = lock.lock() else { return };
-        if g.src.as_ref().map(|s| s.0) != Some(tag) {
-            g.src = Some((tag, source.clone(), segments.to_vec()));
+        let same = g.srcs.len() == sources.len() && g.srcs.iter().zip(sources).all(|(a, b)| a.0 == b.0);
+        if !same {
+            g.srcs = sources.iter().map(|(t, s)| (*t, source.clone(), s.to_vec())).collect();
         }
         let busy = g.busy;
         let want: Vec<StripKey> = keys.into_iter().filter(|k| !self.cache.contains_key(k) && Some(*k) != busy).collect();

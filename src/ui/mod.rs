@@ -992,6 +992,11 @@ impl App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
             }
+            // DISCSLIM_STRIP=1: zoombare Zeitleiste samt Tonspur zeigen
+            if std::env::var("DISCSLIM_STRIP").as_deref() == Ok("1") {
+                self.prefs.timeline_open = true;
+                self.prefs.timeline_wave = true;
+            }
         }
         #[cfg(debug_assertions)]
         self.apply_dev_state(ctx);
