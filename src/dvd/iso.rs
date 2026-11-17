@@ -142,26 +142,46 @@ fn file_extents(img: &mut Img, part: u64, lb: u64) -> Res<(Vec<(u64, u64)>, u64)
     if start + l_ad > SECTOR {
         return Err(tr!("UDF-Zuordnung zu lang", "UDF allocation too long").into());
     }
-    match flags {
-        0 => {
-            for c in fe[start..start + l_ad].chunks_exact(8) {
-                let len = u64::from(le32(c, 0) & 0x3FFF_FFFF);
-                if len > 0 {
-                    out.push((part + u64::from(le32(c, 4)), len));
-                }
-            }
+    let step = match flags {
+        0 => 8,
+        1 => 16,
+        _ => return Ok((out, size)),
+    };
+    let mut have = 0u64;
+    for c in fe[start..start + l_ad].chunks_exact(step) {
+        let len = ad_len(le32(c, 0), size.saturating_sub(have));
+        if len > 0 {
+            out.push((part + u64::from(le32(c, 4)), len));
+            have += len;
         }
-        1 => {
-            for c in fe[start..start + l_ad].chunks_exact(16) {
-                let len = u64::from(le32(c, 0) & 0x3FFF_FFFF);
-                if len > 0 {
-                    out.push((part + u64::from(le32(c, 4)), len));
-                }
-            }
-        }
-        _ => {}
     }
     Ok((out, size))
+}
+
+/// Länge aus einem UDF-Zuordnungseintrag. Die oberen zwei Bits sind eigentlich die Art
+/// des Bereichs; manche Brennprogramme schreiben dort bei Dateien von genau 1 GiB
+/// (VTS_xx_n.VOB) aber die Länge 0x4000_0000 hinein. Dann ist die Länge ohne Maske gemeint.
+fn ad_len(raw: u32, remaining: u64) -> u64 {
+    let len = u64::from(raw & 0x3FFF_FFFF);
+    if len == 0 && raw != 0 && u64::from(raw) <= remaining {
+        u64::from(raw)
+    } else {
+        len
+    }
+}
+
+#[cfg(test)]
+mod ad_tests {
+    use super::ad_len;
+
+    #[test]
+    fn one_gib_extent_is_not_lost() {
+        assert_eq!(ad_len(0x4000_0000, 0x4000_0000), 0x4000_0000);
+        assert_eq!(ad_len(1_073_530_880, 1_073_530_880), 1_073_530_880);
+        // Echte Art-Bits bei einem kurzen Rest bleiben maskiert.
+        assert_eq!(ad_len(0x4000_0800, 0x800), 0x800);
+        assert_eq!(ad_len(0x4000_0000, 2048), 0);
+    }
 }
 
 fn read_dir_udf(img: &mut Img, part: u64, lb: u64) -> Res<Vec<(String, u64, bool)>> {

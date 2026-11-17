@@ -2,6 +2,10 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.046 · 2026-11-17 16:32
+
+- ISO-Abbilder mit einer VOB-Datei von genau 1 GiB werden wieder vollständig gelesen. Manche Brennprogramme tragen diese Länge so ein, dass sie in die Typ-Bits des UDF-Eintrags überläuft. Die Datei (z. B. VTS_01_2.VOB) galt dann als leer und fehlte, alle folgenden Teile rutschten um 1 GiB nach vorn. In der Vorschau sprang der Zeitmarker dadurch plötzlich zurück und das Bild lief im Zeitraffer; auch ein Backup aus so einem Abbild war unvollständig.
+
 ## 1.0.045 · 2026-11-17 11:35
 
 - Wechsel zu „Alle Schnitte“ springt nicht mehr an den Anfang des Schnitts. Liegt das gezeigte Bild im Schnitt des Eintrags, läuft die Wiedergabe einfach weiter, wie beim Wechsel zu „Ganzer Titel“. Nur wenn das Bild außerhalb des Schnitts steht, geht es am Schnittanfang weiter, laufend oder angehalten wie zuvor.
