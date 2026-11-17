@@ -49,6 +49,11 @@ pub struct Source {
     /// Offene Griffe, die die Quelldateien gegen Löschen und Verschieben sperren,
     /// solange irgendetwas diese Quelle noch benutzt.
     pub locks: Arc<Vec<File>>,
+    /// Alle geöffneten Pfade des Benutzers; mehrere bei zusammen geöffneten Videodateien.
+    /// Der erste ist `origin`.
+    pub origins: Vec<PathBuf>,
+    /// Namen der Titel aus den Dateinamen (zusammen geöffnete Videodateien), sonst leer
+    pub title_names: Vec<String>,
 }
 
 /// Welcher VOB-Bereich gelesen wird. `vts` 0 ist der Hauptmenü-Bereich der Disc.
@@ -92,7 +97,7 @@ impl Source {
             return Err(tr!("Im ISO-Abbild gibt es keine VIDEO_TS.IFO. Es ist wohl keine Video-DVD.", "The ISO image has no VIDEO_TS.IFO. It is probably not a video DVD.").into());
         }
         let label = if label.trim().is_empty() { file_label(path) } else { label };
-        Ok(Source { label, origin: path.to_path_buf(), files: Arc::new(files), locks: Arc::default() })
+        Ok(Source { label, origin: path.to_path_buf(), files: Arc::new(files), locks: Arc::default(), origins: vec![path.to_path_buf()], title_names: Vec::new() })
     }
 
     fn open_dir(path: &Path) -> Res<Source> {
@@ -115,7 +120,14 @@ impl Source {
         } else {
             dir.clone()
         };
-        Ok(Source { label: file_label(&base), origin: path.to_path_buf(), files: Arc::new(files), locks: Arc::default() })
+        Ok(Source {
+            label: file_label(&base),
+            origin: path.to_path_buf(),
+            files: Arc::new(files),
+            locks: Arc::default(),
+            origins: vec![path.to_path_buf()],
+            title_names: Vec::new(),
+        })
     }
 
     /// Sperrt die Dateien dieser Quelle (ISO bzw. alle Dateien in VIDEO_TS) gegen Löschen,

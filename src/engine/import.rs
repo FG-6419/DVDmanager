@@ -59,17 +59,37 @@ fn is_dvd_folder(dir: &Path) -> bool {
 /// Öffnet DVD, Ordner, ISO oder Einzeldatei. Eine Einzeldatei wird dafür umgepackt;
 /// `progress` erhält Anteil und Text und liefert false zum Abbrechen.
 pub fn open_source(path: &Path, progress: &mut dyn FnMut(f32, &str) -> bool) -> Res<Source> {
-    if !is_media_path(path) {
-        let mut s = Source::open(path)?;
+    open_sources(std::slice::from_ref(&path.to_path_buf()), progress)
+}
+
+/// Wie `open_source`, aber auch für mehrere VOB-/MPEG-Dateien: Sie werden zusammen zu
+/// einer DVD umgepackt, jede Datei als eigener Titel, benannt nach dem Dateinamen.
+pub fn open_sources(paths: &[PathBuf], progress: &mut dyn FnMut(f32, &str) -> bool) -> Res<Source> {
+    let Some(first) = paths.first() else { return Err(tr!("Keine Datei gewählt.", "No file chosen.").into()) };
+    if paths.len() == 1 && !is_media_path(first) {
+        let mut s = Source::open(first)?;
         s.lock();
         return Ok(s);
     }
-    let dir = import_cached(path, progress)?;
+    if paths.len() > 99 {
+        return Err(tr!("Höchstens 99 Dateien lassen sich zusammen öffnen.", "At most 99 files can be opened together.").into());
+    }
+    if let Some(bad) = paths.iter().find(|p| !is_media_path(p)) {
+        return Err(trf!(
+            "„{}“ ist keine einzelne VOB- oder MPEG-Datei. Mehrere Dateien lassen sich nur als VOB-/MPEG-Dateien zusammen öffnen.",
+            "\"{}\" is not a single VOB or MPEG file. Several files can only be opened together as VOB/MPEG files.",
+            bad.display()
+        ));
+    }
+    let dir = import_cached(paths, progress)?;
     let mut s = Source::open(&dir)?;
-    s.label = path.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "Video".into());
-    s.origin = path.to_path_buf();
-    // Die umgepackte Kopie liegt im Zwischenspeicher; gesperrt wird die Datei des Benutzers.
-    s.locks = std::sync::Arc::new(crate::dvd::source::lock_file(path).into_iter().collect());
+    let stem = |p: &PathBuf| p.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "Video".into());
+    s.title_names = paths.iter().map(stem).collect();
+    s.label = stem(first);
+    s.origin = first.clone();
+    s.origins = paths.to_vec();
+    // Die umgepackte Kopie liegt im Zwischenspeicher; gesperrt werden die Dateien des Benutzers.
+    s.locks = std::sync::Arc::new(paths.iter().filter_map(|p| crate::dvd::source::lock_file(p)).collect());
     Ok(s)
 }
 
@@ -77,19 +97,21 @@ fn cache_root() -> PathBuf {
     std::env::temp_dir().join("DVDmanager-Import")
 }
 
-/// Kennung einer Datei: Pfad, Größe, Änderungszeit.
-fn cache_key(path: &Path) -> Res<u64> {
+/// Kennung der Dateien: Pfade, Größen, Änderungszeiten, in dieser Reihenfolge.
+fn cache_key(paths: &[PathBuf]) -> Res<u64> {
     use std::hash::{Hash, Hasher};
-    let meta = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    path.to_string_lossy().to_lowercase().hash(&mut h);
-    meta.len().hash(&mut h);
-    meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).hash(&mut h);
+    for path in paths {
+        let meta = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        path.to_string_lossy().to_lowercase().hash(&mut h);
+        meta.len().hash(&mut h);
+        meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).hash(&mut h);
+    }
     Ok(h.finish())
 }
 
-fn import_cached(path: &Path, progress: &mut dyn FnMut(f32, &str) -> bool) -> Res<PathBuf> {
-    let base = cache_root().join(format!("{:016x}", cache_key(path)?));
+fn import_cached(paths: &[PathBuf], progress: &mut dyn FnMut(f32, &str) -> bool) -> Res<PathBuf> {
+    let base = cache_root().join(format!("{:016x}", cache_key(paths)?));
     let video_ts = base.join("VIDEO_TS");
     if base.join("fertig").is_file() && video_ts.join("VIDEO_TS.IFO").is_file() {
         return Ok(video_ts);
@@ -104,7 +126,7 @@ fn import_cached(path: &Path, progress: &mut dyn FnMut(f32, &str) -> bool) -> Re
     }
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&video_ts).map_err(|e| format!("{}: {e}", video_ts.display()))?;
-    match import(path, &video_ts, progress) {
+    match import_many(paths, &video_ts, progress) {
         Ok(()) => {
             let _ = std::fs::write(base.join("fertig"), b"1");
             Ok(video_ts)
@@ -118,10 +140,37 @@ fn import_cached(path: &Path, progress: &mut dyn FnMut(f32, &str) -> bool) -> Re
 
 /// Packt `src` in einen VIDEO_TS-Ordner `out` um.
 pub fn import(src: &Path, out: &Path, progress: &mut dyn FnMut(f32, &str) -> bool) -> Res<()> {
+    import_many(&[src.to_path_buf()], out, progress)
+}
+
+/// Packt mehrere Dateien in einen VIDEO_TS-Ordner um: je Datei ein Titelset mit einem Titel.
+pub fn import_many(srcs: &[PathBuf], out: &Path, progress: &mut dyn FnMut(f32, &str) -> bool) -> Res<()> {
+    let sizes: Vec<u64> = srcs.iter().map(|p| std::fs::metadata(p).map(|m| m.len().max(1)).map_err(|e| format!("{}: {e}", p.display()))).collect::<Res<_>>()?;
+    let total: u64 = sizes.iter().sum();
+    let mut before = 0u64;
+    let mut sets = Vec::with_capacity(srcs.len());
+    for (k, src) in srcs.iter().enumerate() {
+        let n = srcs.len();
+        let text = if n > 1 {
+            trf!("Datei {} von {} wird vorbereitet …", "Preparing file {} of {} …", k + 1, n)
+        } else {
+            tr!("Datei wird für die Bearbeitung vorbereitet …", "Preparing the file for editing …").to_string()
+        };
+        let (b, t) = (before as f32, total as f32);
+        let mut sub = |f: f32, _: &str| progress(0.92 * (b + f * sizes[k] as f32) / t, &text);
+        let set = import_one(src, out, (k + 1) as u8, &mut sub).map_err(|e| if n > 1 { format!("{}: {e}", src.display()) } else { e })?;
+        sets.push(set);
+        before += sizes[k];
+    }
+    write_vmg(out, &sets)
+}
+
+/// Packt eine Datei als Titelset `vts` um (Fortschritt 0..1).
+fn import_one(src: &Path, out: &Path, vts: u8, progress: &mut dyn FnMut(f32, &str) -> bool) -> Res<(Vec<u8>, u32, bool)> {
     let total = std::fs::metadata(src).map_err(|e| format!("{}: {e}", src.display()))?.len().max(1);
     let mut f = File::open(src).map_err(|e| format!("{}: {e}", src.display()))?;
-    let text = tr!("Datei wird für die Bearbeitung vorbereitet …", "Preparing the file for editing …");
-    let mut imp = Importer::new(&out.join("VTS_01_1.VOB"))?;
+    let text = "";
+    let mut imp = Importer::new(&out.join(format!("VTS_{vts:02}_1.VOB")))?;
     let mut buf: Vec<u8> = Vec::with_capacity(8 << 20);
     let mut chunk = vec![0u8; 4 << 20];
     let mut done = 0u64;
@@ -140,13 +189,13 @@ pub fn import(src: &Path, out: &Path, progress: &mut dyn FnMut(f32, &str) -> boo
         done += n as u64;
         let used = imp.parse(&buf, false)?;
         buf.drain(..used);
-        if !progress(0.9 * done as f32 / total as f32, text) {
+        if !progress(0.97 * done as f32 / total as f32, text) {
             return Err(tr!("Abgebrochen", "Cancelled").into());
         }
     }
     imp.parse(&buf, true)?;
-    progress(0.92, text);
-    imp.finish(out)
+    progress(1.0, text);
+    imp.finish(out, vts)
 }
 
 /// Erkennt Dateien, die kein MPEG-2-Programmstrom sind.
@@ -882,7 +931,9 @@ impl Importer {
         Ok(())
     }
 
-    fn finish(mut self, out_dir: &Path) -> Res<()> {
+    /// Schreibt Navigationspakete und das IFO des Titelsets `vts`; liefert dessen
+    /// Angaben für VIDEO_TS.IFO (Attribute, Größe in Sektoren, PAL).
+    fn finish(mut self, out_dir: &Path, vts: u8) -> Res<(Vec<u8>, u32, bool)> {
         let gops = self.video.take_gops(true);
         let n = gops.len();
         for (k, g) in gops.into_iter().enumerate() {
@@ -951,24 +1002,33 @@ impl Importer {
         };
         let write = |name: &str, data: &[u8]| crate::dvd::write_output(&out_dir.join(name), data);
         let ifo = author::build_vts(&avts);
-        write("VTS_01_0.IFO", &ifo)?;
-        write("VTS_01_0.BUP", &ifo)?;
+        write(&format!("VTS_{vts:02}_0.IFO"), &ifo)?;
+        write(&format!("VTS_{vts:02}_0.BUP"), &ifo)?;
         let size = (ifo.len() / SECTOR) as u32 * 2 + total;
-        let mut vmg = AVmg {
-            titles: vec![TitleEntry { playback_type: 0x3C, angles: 1, chapters: 1, vts: 1, vts_ttn: 1, vts_sector: 0 }],
-            vts_attrs: vec![attrs.clone()],
-            first_play: vec![author::cmd_jump_tt(1)],
-            menu: None,
-            menu_video: [attrs[0], attrs[1]],
-            pal,
-        };
-        let probe = author::build_vmg(&vmg);
-        author::set_vts_starts(&mut vmg, &[size], (probe.len() / SECTOR) as u32 * 2);
-        let bytes = author::build_vmg(&vmg);
-        write("VIDEO_TS.IFO", &bytes)?;
-        write("VIDEO_TS.BUP", &bytes)?;
-        Ok(())
+        Ok((attrs, size, pal))
     }
+}
+
+/// VIDEO_TS.IFO für umgepackte Dateien: je Titelset ein Titel, abgespielt nacheinander.
+fn write_vmg(out_dir: &Path, sets: &[(Vec<u8>, u32, bool)]) -> Res<()> {
+    let first = &sets[0];
+    let titles = (1..=sets.len())
+        .map(|n| TitleEntry { playback_type: 0x3C, angles: 1, chapters: 1, vts: n as u8, vts_ttn: 1, vts_sector: 0 })
+        .collect();
+    let mut vmg = AVmg {
+        titles,
+        vts_attrs: sets.iter().map(|s| s.0.clone()).collect(),
+        first_play: vec![author::cmd_jump_tt(1)],
+        menu: None,
+        menu_video: [first.0[0], first.0[1]],
+        pal: first.2,
+    };
+    let sizes: Vec<u32> = sets.iter().map(|s| s.1).collect();
+    let probe = author::build_vmg(&vmg);
+    author::set_vts_starts(&mut vmg, &sizes, (probe.len() / SECTOR) as u32 * 2);
+    let bytes = author::build_vmg(&vmg);
+    crate::dvd::write_output(&out_dir.join("VIDEO_TS.IFO"), &bytes)?;
+    crate::dvd::write_output(&out_dir.join("VIDEO_TS.BUP"), &bytes)
 }
 
 /// Tonpakete für eine Folge vollständiger Rahmen (Daten, Ausgabezeit).

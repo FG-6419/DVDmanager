@@ -19,18 +19,14 @@ fn app_icon() -> egui::IconData {
 
 fn main() -> eframe::Result {
     let mut screenshot = None;
-    let mut open = None;
+    let mut open: Vec<PathBuf> = Vec::new();
     let mut args = std::env::args_os().skip(1);
     while let Some(a) = args.next() {
         match a.to_str() {
             Some("--screenshot") => screenshot = args.next().map(PathBuf::from),
-            Some("--open") => open = args.next().map(PathBuf::from),
-            _ => {
-                // Ein einfach übergebener Pfad (z. B. "Öffnen mit") wird geöffnet.
-                if open.is_none() {
-                    open = Some(PathBuf::from(a));
-                }
-            }
+            Some("--open") => open.extend(args.next().map(PathBuf::from)),
+            // Einfach übergebene Pfade (z. B. "Öffnen mit"); mehrere Videodateien gehen zusammen auf.
+            _ => open.push(PathBuf::from(a)),
         }
     }
 

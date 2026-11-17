@@ -829,6 +829,38 @@ fn open_single_mpeg_and_vob_files() {
         assert!(check.is_clean(), "{check:?}");
         assert!((check.seconds - 10.0).abs() < 1.0, "Länge {}", check.seconds);
     }
+    // Mehrere Dateien zusammen: je Datei ein Titel mit ihrem Namen
+    let mpg2 = w.join("zweiter.mpg");
+    std::fs::copy(&mpg, &mpg2).unwrap();
+    let files = vec![vob.clone(), mpg2.clone()];
+    let source = discslim::engine::import::open_sources(&files, &mut |_, _| true).unwrap();
+    assert_eq!(source.origins, files);
+    assert_eq!(source.title_names, vec!["film".to_string(), "zweiter".to_string()]);
+    let mut d = Disc::open(source).unwrap();
+    d.analyse(true, &mut |_, _| true).unwrap();
+    assert_eq!(d.titles.len(), 2);
+    // Titel n ist die n-te Datei (intern kann die Reihenfolge anders sein)
+    let by_number = |n: usize| d.titles.iter().position(|t| t.number == n).unwrap();
+    for (n, tracks, name) in [(1usize, 2usize, "film"), (2, 1, "zweiter")] {
+        let t = &d.titles[by_number(n)];
+        assert!(t.ms.abs_diff(20_000) < 1_000, "Titel {n}: Länge {}", t.ms);
+        assert_eq!(t.audio.len(), tracks, "Titel {n}");
+        assert_eq!(d.title_name(t), Some(name));
+    }
+    // Den zweiten Titel geschnitten ausspielen
+    let second = by_number(2);
+    let mut plan = Plan::new(NO_TARGET);
+    plan.mode = Mode::Reauthor;
+    let mut e = ReauthorEntry::new(second, 0, d.titles[second].chapters.len() - 1, ItemSettings::default());
+    e.cut = Cut { start_ms: Some(4_000), end_ms: Some(14_000), exact: true };
+    plan.reauthor.push(e);
+    let s = run_backup(d, plan, Output::Mpeg { path: w.join("zweiter_Neu.mpg"), audio: None });
+    let check = s.check.unwrap();
+    assert!(check.is_clean(), "{check:?}");
+    assert!((check.seconds - 10.0).abs() < 1.0, "Länge {}", check.seconds);
+    // Eine DVD-ISO bzw. ein Ordner lässt sich nicht mit Videodateien mischen
+    assert!(discslim::engine::import::open_sources(&[vob.clone(), src.clone()], &mut |_, _| true).is_err());
+
     // Eine VOB-Datei in einem DVD-Ordner öffnet weiter die ganze DVD.
     let in_dvd = src.join("VTS_01_1.VOB");
     if in_dvd.is_file() {

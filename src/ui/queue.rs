@@ -59,13 +59,15 @@ impl App {
             let added = if Project::is_project_path(path) {
                 Project::load(path).map(|p| {
                     let output = self.unique_output(&p.label);
-                    BatchItem::new(
+                    let mut item = BatchItem::new(
                         p.source.clone(),
                         p.label.clone(),
                         PlanSource::Fixed { plan: Box::new(p.plan.to_plan()), fingerprint: p.fingerprint.clone() },
                         output,
                         self.prefs.deep_default,
-                    )
+                    );
+                    item.more_sources = p.more_sources.clone();
+                    item
                 })
             } else if discslim::engine::import::is_media_path(path) {
                 // Einzeldatei: wird erst beim Abarbeiten umgepackt

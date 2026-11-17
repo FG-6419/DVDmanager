@@ -2,6 +2,11 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.048 · 2026-11-17 17:37
+
+- Mehrere VOB-/MPEG-Dateien auf einmal öffnen: Im Dialog „VOB-/MPEG-Datei“ lassen sich jetzt mehrere Dateien wählen (auch per Ziehen ins Fenster oder „Öffnen mit“). Sie werden zusammen wie eine DVD geöffnet, jede Datei als eigener Titel in der Reihenfolge der Dateinamen. Die Einträge in „Neue DVD“ und die Titel links heißen wie die Dateien; oben steht „3 Dateien“. Projekte merken sich alle Dateien, auch in der Warteschlange.
+- Export als Einzeldateien: Neue Option „Zusatz an die Dateinamen hängen“ mit änderbarem Text (Vorgabe „_Neu“). Aus „Hochzeit“ wird so „Hochzeit_Neu.mkv“, und der Export kann neben den gleichnamigen Quelldateien liegen. Die Einstellung bleibt gespeichert. Bei zusammen geöffneten Dateien ist „Jeden Titel als eigene Datei speichern“ gleich angehakt.
+
 ## 1.0.047 · 2026-11-17 17:01
 
 - Geöffnete Dateien sind gegen Löschen gesperrt. Solange eine DVD, ein ISO-Abbild oder eine Videodatei geöffnet ist (auch während die Warteschlange sie abarbeitet), lassen sich ihre Dateien im Explorer nicht löschen, umbenennen oder verschieben; Windows meldet dann „Die Datei ist in einem anderen Programm geöffnet“. Gleiches gilt für die geöffnete Projektdatei, die sich weiterhin speichern lässt. Nach dem Schließen oder Beenden ist alles wieder frei. Eingelegte DVDs im Laufwerk werden nicht gesperrt, damit sie sich auswerfen lassen.

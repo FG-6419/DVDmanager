@@ -119,10 +119,14 @@ impl App {
         // „Brennen“ ist jetzt eine Option des ISO-Abbilds
         let burn = self.prefs.backup_kind == OutputKind::Burn;
         let kind = if burn { OutputKind::Iso } else { self.prefs.backup_kind };
+        // Zusammen geöffnete Videodateien: gleich wieder je Titel eine eigene Datei
+        let many_files = self.disc.as_ref().is_some_and(|d| d.source.origins.len() > 1);
         self.backup_dlg = Some(BackupDialog {
             kind,
             burn,
-            separate: false,
+            separate: many_files,
+            suffix_on: self.prefs.file_suffix_on,
+            suffix: self.prefs.file_suffix.clone(),
             separate_dir: file_base.display().to_string(),
             names,
             folder: folder_base.join(&label).display().to_string(),
@@ -372,8 +376,18 @@ impl App {
                     }
                 });
                 if separate {
+                    // Zusatz an die Dateinamen, z. B. damit „Film.vob“ neben der Quelle „Film_Neu.vob“ heißt
+                    ui.add_space(2.0);
+                    ui.horizontal(|ui| {
+                        style::check(ui, &p, &mut dlg.suffix_on, tr!("Zusatz an die Dateinamen hängen:", "Append to the file names:"));
+                        let edit = egui::TextEdit::singleline(&mut dlg.suffix).desired_width(120.0).hint_text("_Neu");
+                        ui.add_enabled(dlg.suffix_on, edit).on_hover_text(tr!(
+                            "Wird an jeden Titelnamen gehängt, z. B. „Film“ wird zu „Film_Neu“. So überschreibt der Export keine gleichnamigen Dateien.",
+                            "Appended to each title name, e.g. \"Film\" becomes \"Film_Neu\". This way the export does not overwrite files with the same name."
+                        ));
+                    });
                     let ext = file_ext(dlg.kind, &dlg.ext);
-                    let files = separate_names(&dlg.names, &rows, &dlg.vob_sel);
+                    let files = separate_names(&dlg.names, &rows, &dlg.vob_sel, dlg.name_suffix());
                     let mut shown: Vec<String> = files.iter().take(3).map(|(_, n)| format!("{n}.{ext}")).collect();
                     if files.len() > 3 {
                         shown.push("…".into());
@@ -624,13 +638,14 @@ impl App {
         let Some(disc) = self.disc.clone() else { return };
         // Einzeldateien: je Datei ein Eintrag in der Warteschlange
         for (output, plan) in self.requests_from_dialog(&dlg, &disc) {
-            let item = BatchItem::new(
+            let mut item = BatchItem::new(
                 disc.source.origin.clone(),
                 disc.source.label.clone(),
                 PlanSource::Fixed { plan: Box::new(plan), fingerprint: Fingerprint::of(&disc) },
                 output,
                 dlg.deep,
             );
+            item.more_sources = disc.source.origins.iter().skip(1).cloned().collect();
             self.queue.push(item);
         }
         let n = self.queue.items().len();
@@ -647,11 +662,13 @@ impl App {
         self.prefs.backup_kind = dlg.kind;
         self.prefs.vob_keep_target = dlg.vob_keep_target;
         self.prefs.file_dir = dlg.separate_dir.clone();
+        self.prefs.file_suffix_on = dlg.suffix_on;
+        self.prefs.file_suffix = dlg.suffix.clone();
         self.note_save_dir(Path::new(&dlg.separate_dir));
         let rows = vob_rows(disc, &self.plan);
         let dir = PathBuf::from(&dlg.separate_dir);
         let ext = file_ext(dlg.kind, &dlg.ext);
-        separate_names(&dlg.names, &rows, &dlg.vob_sel)
+        separate_names(&dlg.names, &rows, &dlg.vob_sel, dlg.name_suffix())
             .into_iter()
             .map(|(i, name)| {
                 let only: Vec<bool> = (0..rows.len()).map(|k| k == i).collect();
@@ -1197,6 +1214,13 @@ fn live_picture(ui: &mut Ui, p: &style::Pal, tex: Option<(egui::TextureId, Vec2)
     });
 }
 
+impl BackupDialog {
+    /// Der Zusatz für die Dateinamen beim Export als Einzeldateien (leer, wenn aus).
+    fn name_suffix(&self) -> &str {
+        if self.suffix_on { self.suffix.trim() } else { "" }
+    }
+}
+
 fn file_ext(kind: OutputKind, style: &ExtStyle) -> String {
     let (ext, up) = match kind {
         OutputKind::Mpeg if style.mpeg_long => ("mpeg", style.upper[1]),
@@ -1209,14 +1233,16 @@ fn file_ext(kind: OutputKind, style: &ExtStyle) -> String {
 
 /// Dateinamen (ohne Endung) für den Export als Einzeldateien: je gewähltem Titel sein
 /// Name (leer: die übliche Bezeichnung), unzulässige Zeichen ersetzt, doppelte durchnummeriert.
-fn separate_names(names: &[String], rows: &[String], sel: &[bool]) -> Vec<(usize, String)> {
+/// `suffix` hängt an jeden Namen (z. B. „_Neu“), damit die Ausgabe neben gleichnamigen
+/// Quelldateien liegen kann.
+fn separate_names(names: &[String], rows: &[String], sel: &[bool], suffix: &str) -> Vec<(usize, String)> {
     let mut out: Vec<(usize, String)> = Vec::new();
     for (i, row) in rows.iter().enumerate() {
         if !sel.get(i).copied().unwrap_or(false) {
             continue;
         }
         let name = names.get(i).map(|n| n.trim()).filter(|n| !n.is_empty()).unwrap_or(row);
-        let base = file_stem(name);
+        let base = file_stem(&format!("{name}{suffix}"));
         let mut cand = base.clone();
         let mut k = 2;
         while out.iter().any(|(_, n)| n.eq_ignore_ascii_case(&cand)) {
@@ -1233,7 +1259,7 @@ fn existing_files(d: &BackupDialog, rows: &[String]) -> Vec<String> {
     if d.separate && matches!(d.kind, OutputKind::Vob | OutputKind::Mpeg | OutputKind::Mkv) {
         let dir = PathBuf::from(&d.separate_dir);
         let ext = file_ext(d.kind, &d.ext);
-        return separate_names(&d.names, rows, &d.vob_sel)
+        return separate_names(&d.names, rows, &d.vob_sel, d.name_suffix())
             .into_iter()
             .map(|(_, n)| dir.join(format!("{n}.{ext}")))
             .filter(|p| p.exists())
@@ -1453,5 +1479,21 @@ fn vob_rows(disc: &Disc, plan: &Plan) -> Vec<String> {
                 Some(trf!("{}. Titel {} · Kapitel {} bis {}", "{}. Title {} · Chapters {} to {}", i + 1, t.number, e.first_chapter + 1, e.last_chapter + 1))
             })
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::separate_names;
+
+    #[test]
+    fn suffix_is_appended_before_numbering() {
+        let rows = vec!["Titel 1".to_string(), "Titel 2".to_string(), "Titel 3".to_string()];
+        let names = vec!["Film".to_string(), String::new(), "Film".to_string()];
+        let sel = vec![true, true, true];
+        let got: Vec<String> = separate_names(&names, &rows, &sel, "_Neu").into_iter().map(|(_, n)| n).collect();
+        assert_eq!(got, vec!["Film_Neu", "Titel 2_Neu", "Film_Neu (2)"]);
+        let plain: Vec<String> = separate_names(&names, &rows, &sel, "").into_iter().map(|(_, n)| n).collect();
+        assert_eq!(plain[0], "Film");
     }
 }

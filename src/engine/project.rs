@@ -92,6 +92,9 @@ pub struct Project {
     pub version: u32,
     /// Ordner, ISO-Datei oder Laufwerk, aus dem die DVD gelesen wurde
     pub source: PathBuf,
+    /// Weitere Videodateien, die mit `source` zusammen geöffnet wurden (je Datei ein Titel)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub more_sources: Vec<PathBuf>,
     pub label: String,
     pub fingerprint: Fingerprint,
     pub plan: PlanData,
@@ -103,6 +106,7 @@ impl Project {
             format: FORMAT.into(),
             version: VERSION,
             source: disc.source.origin.clone(),
+            more_sources: disc.source.origins.iter().skip(1).cloned().collect(),
             label: disc.source.label.clone(),
             fingerprint: Fingerprint::of(disc),
             plan: PlanData::from(plan),
@@ -125,6 +129,11 @@ impl Project {
             return Err(tr!("Die Projektdatei stammt von einer neueren Programmversion.", "The project file comes from a newer program version.").into());
         }
         Ok(p)
+    }
+
+    /// Alle Quellpfade: die DVD bzw. die erste Datei, dann die weiteren Dateien.
+    pub fn sources(&self) -> Vec<PathBuf> {
+        std::iter::once(self.source.clone()).chain(self.more_sources.iter().cloned()).collect()
     }
 
     /// Ist das eine Projektdatei (nach der Endung)?

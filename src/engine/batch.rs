@@ -51,6 +51,8 @@ impl Status {
 pub struct BatchItem {
     pub id: u64,
     pub source: PathBuf,
+    /// Weitere Videodateien, die mit `source` zusammen geöffnet werden
+    pub more_sources: Vec<PathBuf>,
     pub label: String,
     pub plan: PlanSource,
     pub output: Output,
@@ -67,6 +69,7 @@ impl BatchItem {
         Self {
             id: NEXT.fetch_add(1, Ordering::Relaxed),
             source,
+            more_sources: Vec::new(),
             label,
             plan,
             output,
@@ -233,7 +236,8 @@ const CANCELLED: &str = "__abgebrochen__";
 
 fn run_item(job: &BatchItem, cancel: &Arc<AtomicBool>, update: &dyn Fn(&dyn Fn(&mut BatchItem))) -> Res<BackupSummary> {
     // Öffnen und kurz analysieren; das zählt als die ersten 5 %.
-    let source = crate::engine::import::open_source(&job.source, &mut |_, _| !cancel.load(Ordering::Relaxed))?;
+    let paths: Vec<PathBuf> = std::iter::once(job.source.clone()).chain(job.more_sources.iter().cloned()).collect();
+    let source = crate::engine::import::open_sources(&paths, &mut |_, _| !cancel.load(Ordering::Relaxed))?;
     let mut disc = Disc::open(source)?;
     if disc.check_scrambled() {
         return Err(copy_protected().into());

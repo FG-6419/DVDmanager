@@ -100,6 +100,9 @@ pub struct BackupDialog {
     pub separate_dir: String,
     /// Namen der Titel (zugleich Dateinamen beim Export als Einzeldateien)
     pub names: Vec<String>,
+    /// Einzeldateien: Zusatz an jeden Dateinamen hängen (z. B. „_Neu“)
+    pub suffix_on: bool,
+    pub suffix: String,
     /// Schreibweise der Dateiendungen (aus den Einstellungen)
     pub ext: ExtStyle,
 }
@@ -148,6 +151,9 @@ pub struct Prefs {
     pub remove_puo: bool,
     pub region_free: bool,
     pub vob_keep_target: bool,
+    /// Export als Einzeldateien: Zusatz an die Dateinamen hängen, und welcher
+    pub file_suffix_on: bool,
+    pub file_suffix: String,
     /// Vorschau mit Kompression, Schnittansicht, bildgenau als Vorgabe für neue Schnitte
     pub compressed: bool,
     pub cut_view: bool,
@@ -201,6 +207,8 @@ impl Default for Prefs {
             remove_puo: false,
             region_free: false,
             vob_keep_target: true,
+            file_suffix_on: false,
+            file_suffix: "_Neu".into(),
             compressed: false,
             cut_view: false,
             cut_exact: false,
@@ -300,7 +308,7 @@ fn target_sectors(p: &Prefs) -> u64 {
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>, screenshot: Option<PathBuf>, open: Option<PathBuf>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, screenshot: Option<PathBuf>, mut open: Vec<PathBuf>) -> Self {
         let mut prefs = Prefs::default();
         if let Some(st) = cc.storage {
             if let Some(v) = st.get_string("dark") {
@@ -379,11 +387,15 @@ impl App {
             if let Some(v) = st.get_string("file_dir") {
                 prefs.file_dir = v;
             }
+            if let Some(v) = st.get_string("file_suffix") {
+                prefs.file_suffix = v;
+            }
             for (key, slot) in [
                 ("no_split", &mut prefs.no_split),
                 ("remove_puo", &mut prefs.remove_puo),
                 ("region_free", &mut prefs.region_free),
                 ("vob_keep_target", &mut prefs.vob_keep_target),
+                ("file_suffix_on", &mut prefs.file_suffix_on),
                 ("compressed", &mut prefs.compressed),
                 ("cut_view", &mut prefs.cut_view),
                 ("cut_exact", &mut prefs.cut_exact),
@@ -470,7 +482,11 @@ impl App {
         app.preview.audio = Some(discslim::engine::audio::AudioBus::start());
         app.preview.compressed = app.prefs.compressed;
         app.preview.cut_view = app.prefs.cut_view;
-        if let Some(p) = open {
+        // Mehrere Videodateien (z. B. „Öffnen mit“): zusammen öffnen, je Datei ein Titel
+        if open.len() > 1 && open.iter().all(|p| discslim::engine::import::is_media_path(p)) {
+            open.sort_by_key(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default());
+            app.open_media_files(&cc.egui_ctx, open);
+        } else if let Some(p) = open.into_iter().next() {
             app.open_path(&cc.egui_ctx, p);
         }
         app
@@ -497,17 +513,37 @@ impl App {
         });
     }
 
-    /// Dateidialog für eine einzelne VOB- oder MPEG-Datei.
+    /// Dateidialog für VOB- oder MPEG-Dateien. Mehrere gewählte Dateien werden zusammen
+    /// geöffnet: jede als eigener Titel mit ihrem Dateinamen.
     pub(super) fn pick_media(&mut self, ctx: &egui::Context) {
-        if let Some(p) = self
-            .load_dialog(tr!("VOB- oder MPEG-Datei wählen", "Choose VOB or MPEG file"))
+        if let Some(mut files) = self
+            .load_dialog(tr!("VOB- oder MPEG-Dateien wählen", "Choose VOB or MPEG files"))
             .add_filter(tr!("Videodatei (MPEG-2)", "Video file (MPEG-2)"), &["vob", "mpg", "mpeg", "m2p"])
             .add_filter(tr!("Alle Dateien", "All files"), &["*"])
-            .pick_file()
+            .pick_files()
         {
-            self.note_load(&p);
-            self.open_path(ctx, p);
+            if files.is_empty() {
+                return;
+            }
+            // Reihenfolge der Titel: nach Dateinamen, wie im Explorer
+            files.sort_by_key(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default());
+            self.note_load(&files[0]);
+            if files.len() == 1 {
+                self.open_path(ctx, files.remove(0));
+            } else {
+                self.open_media_files(ctx, files);
+            }
         }
+    }
+
+    /// Öffnet mehrere VOB-/MPEG-Dateien zusammen als eine DVD (je Datei ein Titel).
+    pub(super) fn open_media_files(&mut self, ctx: &egui::Context, files: Vec<PathBuf>) {
+        self.pending_project = None;
+        self.project_path = None;
+        self.start_loader(ctx, false, move |tx, cancel| {
+            let source = open_any_list(&files, tx, cancel)?;
+            load_and_analyse(source, tx, cancel)
+        });
     }
 
     /// Ist die geladene Quelle eine einzelne Videodatei (statt einer DVD)?
@@ -524,17 +560,17 @@ impl App {
                 return;
             }
         };
-        let source = proj.source.clone();
-        if !source.exists() {
+        let sources = proj.sources();
+        if let Some(missing) = sources.iter().find(|s| !s.exists()) {
             self.error = Some(trf!(
                 "Die DVD zum Projekt „{}“ ist nicht mehr da:\n{}\n\nLege die DVD ein oder stelle den Ordner bzw. die ISO-Datei wieder an diesen Ort.", "The DVD for project \"{}\" is no longer available:\n{}\n\nInsert the DVD or put the folder or ISO file back in this location.",
                 proj.label,
-                source.display()
+                missing.display()
             ));
             return;
         }
         self.start_loader(ctx, false, move |tx, cancel| {
-            let source = open_any(&source, tx, cancel)?;
+            let source = open_any_list(&sources, tx, cancel)?;
             load_and_analyse(source, tx, cancel)
         });
         self.pending_project = Some(proj);
@@ -809,15 +845,23 @@ impl App {
             .position(|t| t.category == Category::MainMovie)
             .map(|i| Selection::Item(ItemId::Title(i)))
             .unwrap_or(Selection::None);
-        // Einzelne Videodatei: „Ganze DVD“ ergibt keinen Sinn; der Film steht gleich in der Liste.
+        // Videodateien: „Ganze DVD“ ergibt keinen Sinn; jede Datei steht gleich als Eintrag
+        // in der Liste, benannt nach ihrem Dateinamen.
         if discslim::engine::import::is_media_path(&disc.source.origin) {
             self.plan.mode = Mode::Reauthor;
-            if let Some(t) = disc.titles.first() {
-                let settings = self.plan.items.get(&ItemId::Title(0)).cloned().unwrap_or_default();
-                let mut e = discslim::engine::plan::ReauthorEntry::new(0, 0, t.chapters.len().saturating_sub(1), settings);
+            // In der Reihenfolge der Dateien (Titelnummer); intern steht der längste Titel vorn.
+            let mut order: Vec<usize> = (0..disc.titles.len()).collect();
+            order.sort_by_key(|i| disc.titles[*i].number);
+            for i in order {
+                let t = &disc.titles[i];
+                let settings = self.plan.items.get(&ItemId::Title(i)).cloned().unwrap_or_default();
+                let mut e = discslim::engine::plan::ReauthorEntry::new(i, 0, t.chapters.len().saturating_sub(1), settings);
                 let total = discslim::engine::plan::entry_duration_ms(&disc, &e);
                 e.cut = discslim::engine::plan::Cut::whole(total, self.prefs.cut_exact);
+                e.name = disc.title_name(t).map(str::to_string);
                 self.plan.reauthor.push(e);
+            }
+            if !self.plan.reauthor.is_empty() {
                 self.sel = Selection::Entry(0);
             }
         }
@@ -923,7 +967,14 @@ impl App {
         }
         if self.job.is_none() && self.loader.is_none() {
             self.note_load(&dropped[0]);
-            self.open_path(ctx, dropped[0].clone());
+            // Mehrere Videodateien: zusammen öffnen, je Datei ein Titel
+            if dropped.len() > 1 && dropped.iter().all(|p| discslim::engine::import::is_media_path(p)) {
+                let mut files = dropped;
+                files.sort_by_key(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default());
+                self.open_media_files(ctx, files);
+            } else {
+                self.open_path(ctx, dropped[0].clone());
+            }
         }
     }
 
@@ -1039,6 +1090,14 @@ impl App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
             ("backup", 5) => self.open_backup_dialog(),
+            ("backupsuffix", 5) => {
+                // Export-Dialog mit Zusatz an den Dateinamen (zusammen geöffnete Videodateien)
+                self.prefs.backup_kind = OutputKind::Mkv;
+                self.open_backup_dialog();
+                if let Some(d) = self.backup_dlg.as_mut() {
+                    d.suffix_on = true;
+                }
+            }
             ("backupfile" | "backupsep" | "backupone", 5) => {
                 // Export als Datei mit allen Titeln in der Liste; wahlweise als Einzeldateien.
                 // „backupone“: nur ein benannter Eintrag, einzeln gespeichert
@@ -1620,6 +1679,14 @@ fn open_any(path: &Path, tx: &std::sync::mpsc::Sender<LoadMsg>, cancel: &AtomicB
     })
 }
 
+/// Wie `open_any`, auch für mehrere zusammen geöffnete VOB-/MPEG-Dateien.
+fn open_any_list(paths: &[PathBuf], tx: &std::sync::mpsc::Sender<LoadMsg>, cancel: &AtomicBool) -> Result<Source, String> {
+    discslim::engine::import::open_sources(paths, &mut |f, t| {
+        let _ = tx.send(LoadMsg::Progress(f, t.to_string()));
+        !cancel.load(Ordering::Relaxed)
+    })
+}
+
 /// Aktuelle Ortszeit als „HH:MM:SS“.
 fn clock_now() -> String {
     #[cfg(windows)]
@@ -1794,12 +1861,14 @@ impl eframe::App for App {
         storage.set_string("save_dir", self.prefs.save_dir.clone());
         storage.set_string("project_dir", self.prefs.project_dir.clone());
         storage.set_string("file_dir", self.prefs.file_dir.clone());
+        storage.set_string("file_suffix", self.prefs.file_suffix.clone());
         let p = &self.prefs;
         for (key, v) in [
             ("no_split", p.no_split),
             ("remove_puo", self.plan.remove_puo),
             ("region_free", self.plan.region_free),
             ("vob_keep_target", p.vob_keep_target),
+            ("file_suffix_on", p.file_suffix_on),
             ("compressed", self.preview.compressed),
             ("cut_view", self.preview.cut_view),
             ("cut_exact", p.cut_exact),

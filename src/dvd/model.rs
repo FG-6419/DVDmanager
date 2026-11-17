@@ -438,6 +438,12 @@ impl Disc {
         self.stats.get(key).copied().unwrap_or_default()
     }
 
+    /// Name eines Titels aus dem Dateinamen (zusammen geöffnete Videodateien: Titel n ist
+    /// die n-te Datei), sonst keiner.
+    pub fn title_name(&self, t: &Title) -> Option<&str> {
+        self.source.title_names.get(t.number.checked_sub(1)?).map(|n| n.trim()).filter(|n| !n.is_empty())
+    }
+
     /// Größen eines Titels; Zellen zählen hier auch, wenn sie geteilt sind.
     pub fn title_stats(&self, t: &Title) -> CellStats {
         let mut s = CellStats::default();

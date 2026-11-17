@@ -929,7 +929,7 @@ fn guard_source(disc: &Disc, output: &Output, video_dir: &Path) -> Res<()> {
                 .files
                 .values()
                 .any(|r| matches!(r, FileRef::Disk(d) if same(p, d)));
-            if is_source_file || same(p, &disc.source.origin) {
+            if is_source_file || same(p, &disc.source.origin) || disc.source.origins.iter().any(|o| same(p, o)) {
                 return Err(tr!("Das Ziel ist dieselbe Datei wie die Quelle. Bitte wähle einen anderen Namen.", "The target is the same file as the source. Please choose a different name.").into());
             }
         }

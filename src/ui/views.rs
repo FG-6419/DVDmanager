@@ -102,8 +102,14 @@ impl App {
                     if has_disc && self.is_single_file() {
                         // Einzelne Videodatei: nur Neu zusammenstellen
                         ui.add_space(14.0);
-                        ui.label(RichText::new(trf!("{}  Einzeldatei", "{}  Single file", ic::FILE_VIDEO)).size(13.0).color(p.muted))
-                            .on_hover_text(tr!("Eine einzelne VOB- oder MPEG-Datei: Schneiden, Zusammenstellen und Ausgeben wie bei einer DVD", "A single VOB or MPEG file: cut, assemble and write it like a DVD"));
+                        let files = self.disc.as_ref().map(|d| d.source.origins.len()).unwrap_or(1);
+                        if files > 1 {
+                            ui.label(RichText::new(format!("{}  {}", ic::FILE_VIDEO, discslim::i18n::count(files, "Datei", "Dateien", "file", "files"))).size(13.0).color(p.muted))
+                                .on_hover_text(tr!("Mehrere VOB- oder MPEG-Dateien, jede als eigener Titel: Schneiden, Zusammenstellen und Ausgeben wie bei einer DVD", "Several VOB or MPEG files, each as its own title: cut, assemble and write them like a DVD"));
+                        } else {
+                            ui.label(RichText::new(trf!("{}  Einzeldatei", "{}  Single file", ic::FILE_VIDEO)).size(13.0).color(p.muted))
+                                .on_hover_text(tr!("Eine einzelne VOB- oder MPEG-Datei: Schneiden, Zusammenstellen und Ausgeben wie bei einer DVD", "A single VOB or MPEG file: cut, assemble and write it like a DVD"));
+                        }
                     } else if has_disc {
                         ui.add_space(14.0);
                         let mut mode = self.plan.mode;
@@ -637,7 +643,14 @@ impl App {
         }
 
         ui.separator();
-        let heading = if self.is_single_file() { tr!("Inhalt der Datei", "Contents of the file") } else { tr!("Titel dieser DVD", "Titles on this DVD") };
+        let many = disc.source.origins.len() > 1;
+        let heading = if many {
+            tr!("Geöffnete Dateien", "Opened files")
+        } else if self.is_single_file() {
+            tr!("Inhalt der Datei", "Contents of the file")
+        } else {
+            tr!("Titel dieser DVD", "Titles on this DVD")
+        };
         group_label(ui, &p, heading);
         ScrollArea::vertical().id_salt("quelle").auto_shrink([false, false]).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
@@ -662,6 +675,8 @@ impl App {
                         add = true;
                     }
                     let selected = self.sel == Selection::Source(idx);
+                    // Zusammen geöffnete Videodateien: der Dateiname statt „Titel n“
+                    let title = disc.title_name(t).map(str::to_string).unwrap_or_else(|| trf!("Titel {}", "Title {}", t.number));
                     let r = item_row(
                         ui,
                         &p,
@@ -669,7 +684,7 @@ impl App {
                         selected,
                         ic::FILM_STRIP,
                         p.muted,
-                        &trf!("Titel {}", "Title {}", t.number),
+                        &title,
                         &sub,
                         &fmt_size(stats.total),
                         tr!("ansehen", "view"),
@@ -1045,6 +1060,7 @@ impl App {
         let mut entry = ReauthorEntry::new(idx, 0, last, settings);
         let total = entry_duration_ms(disc, &entry);
         entry.cut = Cut::whole(total, self.prefs.cut_exact);
+        entry.name = disc.title_name(t).map(str::to_string);
         self.plan.reauthor.push(entry);
         self.marked.clear();
         self.mark_anchor = None;
