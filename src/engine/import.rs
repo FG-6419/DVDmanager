@@ -28,6 +28,8 @@ use crate::engine::splice::header_key;
 const START_PTS: i64 = 45_000;
 /// Systemuhr-Schritt je Sektor bei 10,08 MBit/s (27 MHz)
 const SCR_TICK: u64 = 43_886;
+/// Mindestvorlauf der Tonpakete vor ihrer Abspielzeit (100 ms, 90 kHz)
+const AUDIO_LEAD: i64 = 9_000;
 /// Ab dieser Abweichung (0,7 s) gilt ein Zeitstempel als Sprung in der Quelle.
 const JUMP: i64 = 63_000;
 
@@ -93,6 +95,9 @@ pub fn open_sources(paths: &[PathBuf], progress: &mut dyn FnMut(f32, &str) -> bo
     Ok(s)
 }
 
+/// Stand des Umpackens; 2: Tonspuren nach Zeit verzahnt
+const IMPORT_VERSION: u32 = 2;
+
 fn cache_root() -> PathBuf {
     std::env::temp_dir().join("DVDmanager-Import")
 }
@@ -101,6 +106,8 @@ fn cache_root() -> PathBuf {
 fn cache_key(paths: &[PathBuf]) -> Res<u64> {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
+    // Ändert sich das Umpacken, gelten alte Kopien im Zwischenspeicher nicht mehr.
+    IMPORT_VERSION.hash(&mut h);
     for path in paths {
         let meta = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
         path.to_string_lossy().to_lowercase().hash(&mut h);
@@ -659,7 +666,14 @@ struct Importer {
     last_e_out: Option<i64>,
     first_s_out: Option<i64>,
     last_scr: u64,
+    /// Fertige Bildgruppen, deren Ton in der Quelle noch nicht ganz gelesen ist
+    pending: VecDeque<Gop>,
 }
+
+/// So weit (0,5 s) muss der Ton jeder Spur über das Ende einer Bildgruppe hinaus gelesen
+/// sein, bevor die Gruppe geschrieben wird. Höchstens so viele Gruppen warten.
+const AUDIO_AHEAD: i64 = 45_000;
+const MAX_PENDING: usize = 24;
 
 impl Importer {
     fn new(path: &Path) -> Res<Self> {
@@ -675,7 +689,26 @@ impl Importer {
             last_e_out: None,
             first_s_out: None,
             last_scr: 0,
+            pending: VecDeque::new(),
         })
+    }
+
+    /// Schreibt wartende Bildgruppen, sobald ihr Ton gelesen ist. Der Ton liegt in vielen
+    /// Quellen ein Stück hinter dem Bild; ohne Warten käme er erst in die nächste VOBU und
+    /// damit knapp oder zu spät beim Player an.
+    fn flush_ready(&mut self) -> Res<()> {
+        while let Some(g) = self.pending.front() {
+            let end = g.pics.iter().filter_map(|p| p.4).max();
+            let ready = self.pending.len() > MAX_PENDING
+                || end.is_none()
+                || self.audio.iter().all(|a| a.last_src.is_some_and(|l| l >= end.unwrap_or(0) + AUDIO_AHEAD));
+            if !ready {
+                break;
+            }
+            let g = self.pending.pop_front().unwrap();
+            self.write_gop(g, false)?;
+        }
+        Ok(())
     }
 
     /// Liest Pakete aus `buf`; liefert, wie viele Bytes verbraucht sind.
@@ -738,9 +771,9 @@ impl Importer {
         match id {
             0xE0 => {
                 self.video.push(payload, pts, dts);
-                for g in self.video.take_gops(false) {
-                    self.write_gop(g, false)?;
-                }
+                let gops = self.video.take_gops(false);
+                self.pending.extend(gops);
+                self.flush_ready()?;
             }
             0xC0..=0xC7 => self.audio_in(id, AKind::Mpeg, payload, pts, None),
             0xBD if payload.len() > 4 => {
@@ -765,6 +798,10 @@ impl Importer {
                 }
             }
             _ => {}
+        }
+        // Neuer Ton kann wartende Bildgruppen freigeben
+        if id != 0xE0 && !self.pending.is_empty() {
+            self.flush_ready()?;
         }
         Ok(())
     }
@@ -849,7 +886,7 @@ impl Importer {
 
         // Ton bis zum Ende dieser Gruppe (am Ende der Datei: alles)
         let first_s = self.first_s_out.unwrap_or(s_out);
-        let mut audio: Vec<(u8, [u8; SECTOR])> = Vec::new();
+        let mut audio: Vec<(i64, u8, [u8; SECTOR])> = Vec::new();
         for a in self.audio.iter_mut() {
             if last {
                 a.parse(true);
@@ -869,12 +906,34 @@ impl Importer {
                 a.last_out = Some(t);
                 take.push((data, t));
             }
+            // Zeit je Paket: sein Zeitstempel, sonst der des Pakets davor
+            let mut t_prev = take.first().map(|f| f.1).unwrap_or(s_out);
             for s in audio_packs(a, &take) {
-                audio.push((a.phys, s));
+                if s[21] & 0x80 != 0 {
+                    t_prev = read_ts(&s[23..]) as i64;
+                }
+                audio.push((t_prev, a.phys, s));
             }
         }
+        // Alle Tonspuren nach Zeit verzahnen. Nacheinander (erst Spur 1, dann Spur 2) kämen
+        // die Pakete der späteren Spuren ans Ende der VOBU und damit oft erst nach ihrer
+        // Abspielzeit an; Player stocken dann. Nachgereichter Ton der vorigen Gruppe steht so vorn.
+        audio.sort_by_key(|a| a.0);
 
-        // Verzahnen: Navigationspaket, dann Bild und Ton gleichmäßig verteilt
+        // Systemuhr: etwas vor dem ersten Bild, je Paket einen Schritt weiter
+        let scr0 = (((s_out - 27_000).max(0) as u64) * 300).max(self.last_scr + SCR_TICK);
+        // Spätester Platz (Paketnummer in der VOBU) je Tonpaket: es soll mindestens
+        // AUDIO_LEAD vor seiner Abspielzeit ankommen, wie auf gekauften DVDs.
+        let due: Vec<usize> = audio
+            .iter()
+            .map(|a| {
+                let want = (a.0 - AUDIO_LEAD).max(0) as u64 * 300;
+                (want.saturating_sub(scr0) / SCR_TICK) as usize
+            })
+            .collect();
+
+        // Verzahnen: Navigationspaket, dann Bild und Ton gleichmäßig verteilt; Ton, dessen
+        // Frist erreicht ist, geht vor.
         let n_v = video.len();
         let n_a = audio.len();
         let mut sectors: Vec<[u8; SECTOR]> = Vec::with_capacity(1 + n_v + n_a);
@@ -885,13 +944,14 @@ impl Importer {
         sectors.push(nav);
         let (mut vi, mut ai) = (0usize, 0usize);
         while vi < n_v || ai < n_a {
-            let take_video = ai >= n_a || (vi < n_v && (vi as f64 / n_v as f64) <= (ai as f64 / n_a.max(1) as f64));
+            let urgent = ai < n_a && due[ai] <= sectors.len();
+            let take_video = !urgent && (ai >= n_a || (vi < n_v && (vi as f64 / n_v as f64) <= (ai as f64 / n_a.max(1) as f64)));
             if take_video {
                 video_at.push(sectors.len());
                 sectors.push(video[vi]);
                 vi += 1;
             } else {
-                let (phys, s) = audio[ai];
+                let (_, phys, s) = audio[ai];
                 let k = usize::from(phys);
                 if sync[k] == 0x3FFF {
                     sync[k] = sectors.len() as u16;
@@ -900,8 +960,7 @@ impl Importer {
                 ai += 1;
             }
         }
-        // Systemuhr: etwas vor dem ersten Bild, gleichmäßig weiter
-        let mut scr = (((s_out - 27_000).max(0) as u64) * 300).max(self.last_scr + SCR_TICK);
+        let mut scr = scr0;
         let nav_scr = scr;
         for s in sectors.iter_mut() {
             put_scr(s, scr);
@@ -934,7 +993,8 @@ impl Importer {
     /// Schreibt Navigationspakete und das IFO des Titelsets `vts`; liefert dessen
     /// Angaben für VIDEO_TS.IFO (Attribute, Größe in Sektoren, PAL).
     fn finish(mut self, out_dir: &Path, vts: u8) -> Res<(Vec<u8>, u32, bool)> {
-        let gops = self.video.take_gops(true);
+        let mut gops: Vec<Gop> = self.pending.drain(..).collect();
+        gops.extend(self.video.take_gops(true));
         let n = gops.len();
         for (k, g) in gops.into_iter().enumerate() {
             self.write_gop(g, k + 1 == n)?;

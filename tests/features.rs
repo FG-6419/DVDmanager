@@ -861,6 +861,54 @@ fn open_single_mpeg_and_vob_files() {
     // Eine DVD-ISO bzw. ein Ordner lässt sich nicht mit Videodateien mischen
     assert!(discslim::engine::import::open_sources(&[vob.clone(), src.clone()], &mut |_, _| true).is_err());
 
+    // Ton, der in der Quelle deutlich hinter dem Bild liegt (wie bei vielen DVD-Rips): Nach dem
+    // Umpacken muss trotzdem jedes Tonpaket beider Spuren vor seiner Abspielzeit ankommen,
+    // sonst stocken Player.
+    let late = w.join("spaet.vob");
+    {
+        let data = std::fs::read(&vob).unwrap();
+        let secs: Vec<&[u8]> = data.chunks_exact(SECTOR).collect();
+        // Jedes Tonpaket wandert 150 Pakete weiter nach hinten.
+        let (mut out, mut held): (Vec<u8>, std::collections::VecDeque<(usize, &[u8])>) = (Vec::new(), Default::default());
+        for (n, s) in secs.iter().enumerate() {
+            while held.front().is_some_and(|(k, _)| n >= k + 150) {
+                out.extend_from_slice(held.pop_front().unwrap().1);
+            }
+            let h = pack_header_len(s);
+            if s[h + 3] == 0xBD {
+                held.push_back((n, s));
+            } else {
+                out.extend_from_slice(s);
+            }
+        }
+        for (_, s) in held {
+            out.extend_from_slice(s);
+        }
+        std::fs::write(&late, out).unwrap();
+    }
+    let ls = open_source(&late, &mut |_, _| true).unwrap();
+    if let Some(discslim::dvd::source::FileRef::Disk(p)) = ls.files.get("VTS_01_1.VOB") {
+        let data = std::fs::read(p).unwrap();
+        let mut worst = i64::MAX;
+        let mut streams = std::collections::BTreeSet::new();
+        for s in data.chunks_exact(SECTOR) {
+            let h = pack_header_len(s);
+            if s[h + 3] != 0xBD || s[h + 7] & 0x80 == 0 {
+                continue;
+            }
+            streams.insert(s[h + 9 + usize::from(s[h + 8])]);
+            let scr = {
+                let b = &s[4..10];
+                (i64::from(b[0] >> 3 & 7) << 30) | (i64::from(b[0] & 3) << 28) | (i64::from(b[1]) << 20) | (i64::from(b[2] >> 3) << 15) | (i64::from(b[2] & 3) << 13) | (i64::from(b[3]) << 5) | i64::from(b[4] >> 3)
+            };
+            worst = worst.min(read_ts(&s[h + 9..]) as i64 - scr);
+        }
+        assert!(streams.len() >= 2, "Testdatei sollte zwei Tonspuren haben: {streams:?}");
+        assert!(worst > 0, "Tonpaket kommt {} ms zu spät", -worst / 90);
+    } else {
+        panic!("umgepackte VOB fehlt");
+    }
+
     // Eine VOB-Datei in einem DVD-Ordner öffnet weiter die ganze DVD.
     let in_dvd = src.join("VTS_01_1.VOB");
     if in_dvd.is_file() {

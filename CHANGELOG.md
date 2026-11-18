@@ -2,6 +2,10 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.049 · 2026-11-18 09:35
+
+- Hänger im Ton bei geöffneten VOB-/MPEG-Dateien behoben: Beim Umpacken kam bei Dateien mit mehreren Tonspuren die zweite Spur fast durchgehend zu spät beim Player an (bis zu 0,2 s nach ihrer Abspielzeit), die erste nur knapp rechtzeitig. Player stockten dann, vor allem auf der zweiten Spur, und der Export übernahm das. Ursache: Der Ton liegt in vielen Quellen ein Stück hinter dem Bild und landete in der nächsten VOBU, dort zudem Spur für Spur statt nach Zeit einsortiert. Jetzt wartet das Umpacken, bis der Ton einer Bildgruppe gelesen ist, verzahnt alle Spuren nach Zeit und hält mindestens 100 ms Vorlauf ein (gemessen an einer echten Folge: jetzt über 260 ms auf beiden Spuren). Alte umgepackte Kopien im Zwischenspeicher werden dafür einmal neu angelegt; bereits exportierte Dateien bitte neu exportieren.
+
 ## 1.0.048 · 2026-11-17 17:37
 
 - Mehrere VOB-/MPEG-Dateien auf einmal öffnen: Im Dialog „VOB-/MPEG-Datei“ lassen sich jetzt mehrere Dateien wählen (auch per Ziehen ins Fenster oder „Öffnen mit“). Sie werden zusammen wie eine DVD geöffnet, jede Datei als eigener Titel in der Reihenfolge der Dateinamen. Die Einträge in „Neue DVD“ und die Titel links heißen wie die Dateien; oben steht „3 Dateien“. Projekte merken sich alle Dateien, auch in der Warteschlange.
