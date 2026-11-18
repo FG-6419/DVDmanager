@@ -2,6 +2,10 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.050 · 2026-11-18 10:04
+
+- Umpacken von VOB-/MPEG-Dateien: Der Ton kommt jetzt gleichmäßig 120 ms vor seiner Abspielzeit beim Player an, wie auf gekauften DVDs (dort etwa 100 ms). In 1.0.049 waren es über 260 ms, was den kleinen Tonpuffer mancher Hardware-Player überfüllen kann. Dafür läuft die Systemuhr einer VOBU jetzt gleichmäßig über ihre ganze Dauer, statt am Anfang gedrängt; das Bild kommt 200–260 ms vor seiner Dekodierzeit. Gemessen an einer echten Folge mit zwei Tonspuren: beide Spuren 117–120 ms, nirgends zu spät. Umgepackte Kopien im Zwischenspeicher werden dafür einmal neu angelegt.
+
 ## 1.0.049 · 2026-11-18 09:35
 
 - Hänger im Ton bei geöffneten VOB-/MPEG-Dateien behoben: Beim Umpacken kam bei Dateien mit mehreren Tonspuren die zweite Spur fast durchgehend zu spät beim Player an (bis zu 0,2 s nach ihrer Abspielzeit), die erste nur knapp rechtzeitig. Player stockten dann, vor allem auf der zweiten Spur, und der Export übernahm das. Ursache: Der Ton liegt in vielen Quellen ein Stück hinter dem Bild und landete in der nächsten VOBU, dort zudem Spur für Spur statt nach Zeit einsortiert. Jetzt wartet das Umpacken, bis der Ton einer Bildgruppe gelesen ist, verzahnt alle Spuren nach Zeit und hält mindestens 100 ms Vorlauf ein (gemessen an einer echten Folge: jetzt über 260 ms auf beiden Spuren). Alte umgepackte Kopien im Zwischenspeicher werden dafür einmal neu angelegt; bereits exportierte Dateien bitte neu exportieren.

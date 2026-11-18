@@ -890,6 +890,7 @@ fn open_single_mpeg_and_vob_files() {
     if let Some(discslim::dvd::source::FileRef::Disk(p)) = ls.files.get("VTS_01_1.VOB") {
         let data = std::fs::read(p).unwrap();
         let mut worst = i64::MAX;
+        let mut most = i64::MIN;
         let mut streams = std::collections::BTreeSet::new();
         for s in data.chunks_exact(SECTOR) {
             let h = pack_header_len(s);
@@ -901,10 +902,14 @@ fn open_single_mpeg_and_vob_files() {
                 let b = &s[4..10];
                 (i64::from(b[0] >> 3 & 7) << 30) | (i64::from(b[0] & 3) << 28) | (i64::from(b[1]) << 20) | (i64::from(b[2] >> 3) << 15) | (i64::from(b[2] & 3) << 13) | (i64::from(b[3]) << 5) | i64::from(b[4] >> 3)
             };
-            worst = worst.min(read_ts(&s[h + 9..]) as i64 - scr);
+            let lead = read_ts(&s[h + 9..]) as i64 - scr;
+            worst = worst.min(lead);
+            most = most.max(lead);
         }
         assert!(streams.len() >= 2, "Testdatei sollte zwei Tonspuren haben: {streams:?}");
         assert!(worst > 0, "Tonpaket kommt {} ms zu spät", -worst / 90);
+        // Nicht viel früher als nötig (kleiner Tonpuffer mancher Hardware-Player)
+        assert!(most < 200 * 90, "Tonpaket kommt {} ms vor seiner Zeit", most / 90);
     } else {
         panic!("umgepackte VOB fehlt");
     }

@@ -28,8 +28,11 @@ use crate::engine::splice::header_key;
 const START_PTS: i64 = 45_000;
 /// Systemuhr-Schritt je Sektor bei 10,08 MBit/s (27 MHz)
 const SCR_TICK: u64 = 43_886;
-/// Mindestvorlauf der Tonpakete vor ihrer Abspielzeit (100 ms, 90 kHz)
-const AUDIO_LEAD: i64 = 9_000;
+/// Vorlauf der Tonpakete vor ihrer Abspielzeit (120 ms, 90 kHz). Gekaufte DVDs liegen bei
+/// etwa 100 ms; deutlich mehr füllt bei manchen Hardware-Playern den kleinen Tonpuffer.
+const AUDIO_LEAD: i64 = 10_800;
+/// Vorlauf der Bildpakete: so weit vor dem ersten Bild einer VOBU beginnt ihre Systemuhr (0,3 s)
+const VIDEO_LEAD: i64 = 27_000;
 /// Ab dieser Abweichung (0,7 s) gilt ein Zeitstempel als Sprung in der Quelle.
 const JUMP: i64 = 63_000;
 
@@ -95,8 +98,8 @@ pub fn open_sources(paths: &[PathBuf], progress: &mut dyn FnMut(f32, &str) -> bo
     Ok(s)
 }
 
-/// Stand des Umpackens; 2: Tonspuren nach Zeit verzahnt
-const IMPORT_VERSION: u32 = 2;
+/// Stand des Umpackens; 2: Tonspuren nach Zeit verzahnt, 3: Ton mit festem Vorlauf
+const IMPORT_VERSION: u32 = 3;
 
 fn cache_root() -> PathBuf {
     std::env::temp_dir().join("DVDmanager-Import")
@@ -884,7 +887,10 @@ impl Importer {
             video.push(s);
         }
 
-        // Ton bis zum Ende dieser Gruppe (am Ende der Datei: alles)
+        // Ton, der während dieser VOBU beim Player ankommen soll: Die Systemuhr läuft von
+        // VIDEO_LEAD vor dem ersten bis VIDEO_LEAD vor dem nächsten Bild; der Ton kommt
+        // AUDIO_LEAD vor seiner Abspielzeit (am Ende der Datei: aller restliche Ton).
+        let audio_until = e_out - VIDEO_LEAD + AUDIO_LEAD;
         let first_s = self.first_s_out.unwrap_or(s_out);
         let mut audio: Vec<(i64, u8, [u8; SECTOR])> = Vec::new();
         for a in self.audio.iter_mut() {
@@ -894,7 +900,7 @@ impl Importer {
             let mut take: Vec<(Vec<u8>, i64)> = Vec::new();
             while let Some((_, src)) = a.frames.front() {
                 let (t, new_off) = a.out_time(*src, off);
-                if !last && t >= e_out {
+                if !last && t >= audio_until {
                     break;
                 }
                 let (data, _) = a.frames.pop_front().unwrap();
@@ -915,58 +921,51 @@ impl Importer {
                 audio.push((t_prev, a.phys, s));
             }
         }
-        // Alle Tonspuren nach Zeit verzahnen. Nacheinander (erst Spur 1, dann Spur 2) kämen
-        // die Pakete der späteren Spuren ans Ende der VOBU und damit oft erst nach ihrer
-        // Abspielzeit an; Player stocken dann. Nachgereichter Ton der vorigen Gruppe steht so vorn.
+        // Alle Tonspuren nach Zeit; nacheinander (erst Spur 1, dann Spur 2) kämen die späteren
+        // Spuren ans Ende der VOBU und damit oft erst nach ihrer Abspielzeit an.
         audio.sort_by_key(|a| a.0);
 
-        // Systemuhr: etwas vor dem ersten Bild, je Paket einen Schritt weiter
-        let scr0 = (((s_out - 27_000).max(0) as u64) * 300).max(self.last_scr + SCR_TICK);
-        // Spätester Platz (Paketnummer in der VOBU) je Tonpaket: es soll mindestens
-        // AUDIO_LEAD vor seiner Abspielzeit ankommen, wie auf gekauften DVDs.
-        let due: Vec<usize> = audio
-            .iter()
-            .map(|a| {
-                let want = (a.0 - AUDIO_LEAD).max(0) as u64 * 300;
-                (want.saturating_sub(scr0) / SCR_TICK) as usize
-            })
-            .collect();
-
-        // Verzahnen: Navigationspaket, dann Bild und Ton gleichmäßig verteilt; Ton, dessen
-        // Frist erreicht ist, geht vor.
+        // Systemuhr (27 MHz): Die VOBU füllt die Zeit von VIDEO_LEAD vor ihrem ersten Bild bis
+        // VIDEO_LEAD vor der nächsten VOBU. Bildpakete verteilen sich gleichmäßig darüber,
+        // jedes Tonpaket kommt AUDIO_LEAD vor seiner Abspielzeit, wie auf gekauften DVDs.
+        // Nie schneller als die DVD-Datenrate (ein Schritt SCR_TICK je Paket).
         let n_v = video.len();
         let n_a = audio.len();
+        let scr0 = (((s_out - VIDEO_LEAD).max(0) as u64) * 300).max(self.last_scr + SCR_TICK);
+        let window = (dur.max(0) as u64 * 300).max((1 + n_v + n_a) as u64 * SCR_TICK);
+        let want_v = |i: usize| scr0 + (i as u64 + 1) * window / (n_v as u64 + 1);
+        let want_a = |i: usize| ((audio[i].0 - AUDIO_LEAD).max(0) as u64 * 300).max(scr0);
+
         let mut sectors: Vec<[u8; SECTOR]> = Vec::with_capacity(1 + n_v + n_a);
         let mut sync = [0x3FFFu16; 8];
         let mut video_at: Vec<usize> = Vec::with_capacity(n_v);
         let mut nav = [0u8; SECTOR];
         nav.copy_from_slice(&nav_pack(0));
+        put_scr(&mut nav, scr0);
         sectors.push(nav);
+        let nav_scr = scr0;
+        let mut scr = scr0;
         let (mut vi, mut ai) = (0usize, 0usize);
         while vi < n_v || ai < n_a {
-            let urgent = ai < n_a && due[ai] <= sectors.len();
-            let take_video = !urgent && (ai >= n_a || (vi < n_v && (vi as f64 / n_v as f64) <= (ai as f64 / n_a.max(1) as f64)));
-            if take_video {
+            let take_video = ai >= n_a || (vi < n_v && want_v(vi) < want_a(ai));
+            let (mut s, want) = if take_video {
                 video_at.push(sectors.len());
-                sectors.push(video[vi]);
                 vi += 1;
+                (video[vi - 1], want_v(vi - 1))
             } else {
                 let (_, phys, s) = audio[ai];
                 let k = usize::from(phys);
                 if sync[k] == 0x3FFF {
                     sync[k] = sectors.len() as u16;
                 }
-                sectors.push(s);
                 ai += 1;
-            }
+                (s, want_a(ai - 1))
+            };
+            scr = want.max(scr + SCR_TICK);
+            put_scr(&mut s, scr);
+            sectors.push(s);
         }
-        let mut scr = scr0;
-        let nav_scr = scr;
-        for s in sectors.iter_mut() {
-            put_scr(s, scr);
-            self.last_scr = scr;
-            scr += SCR_TICK;
-        }
+        self.last_scr = scr;
         // Ende der ersten drei Bezugsbilder (I/P) in Sektoren der VOBU
         let mut refs = [0u32; 3];
         let mut r = 0;
