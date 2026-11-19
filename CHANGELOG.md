@@ -2,6 +2,10 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.054 · 2026-11-19 12:42
+
+- Klick auf die Zeitleiste während der Wiedergabe: Das Bild zitterte kurz zurück und vor. Beim Drücken sprang die Vorschau zum Schlüsselbild vor der Stelle und lief von dort an, beim Loslassen sprang sie ein zweites Mal an dieselbe Stelle, inzwischen aber schon um die Klickdauer weitergelaufen. Jetzt springt sie bei laufender Wiedergabe gleich beim Drücken bildgenau und beim Loslassen nicht noch einmal. Gilt für die schmale und die zoombare Zeitleiste; angehalten bleibt alles wie bisher.
+
 ## 1.0.053 · 2026-11-19 12:19
 
 - Zusammenführen blieb oft grau, obwohl die markierten Titel lückenlos aus einem Titel geschnitten waren. Das Menü zählte die markierten Einträge gegen eine falsche Zahl (die der Kapitelteile des angeklickten Eintrags) und verwarf dabei die hinteren. Jetzt werden alle markierten berücksichtigt. Der Menüpunkt heißt „x gewählte Titel zu einem zusammenführen“.

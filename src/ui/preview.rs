@@ -554,6 +554,15 @@ impl PreviewState {
     }
 
     fn upload(&mut self, ctx: &egui::Context, f: PreviewFrame) {
+        // Nur für Prüfläufe: jedes gezeigte Bild mit Zeit und Sprungkennung protokollieren
+        #[cfg(debug_assertions)]
+        if let Ok(log) = std::env::var("DISCSLIM_FRAMELOG") {
+            use std::io::Write;
+            if let Ok(mut fl) = std::fs::OpenOptions::new().create(true).append(true).open(log) {
+                let clock = self.audio.as_ref().and_then(|a| a.clock_ms());
+                let _ = writeln!(fl, "Bild {:.0} ms  Sprung {}  Tonuhr {:?}", f.time_ms, f.seek_id, clock.map(|c| c as i64));
+            }
+        }
         let img = egui::ColorImage::from_rgba_unmultiplied([f.width, f.height], &f.rgba);
         match self.texture.as_mut() {
             Some(t) => t.set(img, TextureOptions::LINEAR),
@@ -1033,8 +1042,9 @@ fn view_strip(
         }
     }
     if resp.drag_stopped() || resp.clicked() {
-        s.drag_live = None;
-        final_seek = s.drag.take();
+        // Wohin beim Drücken bzw. Ziehen zuletzt gesprungen wurde
+        let live_at = s.drag_live.take().map(|d| d.0);
+        final_seek = s.drag.take().map(|t| (t, live_at));
     }
     if resp.secondary_clicked() {
         s.ctx_ms = resp.interact_pointer_pos().map(|pp| t_of(pp.x).clamp(lo, hi));
@@ -1103,19 +1113,53 @@ fn view_strip(
         let moved = st.strip.drag_live.is_none_or(|(last, _)| (last - t).abs() > 20.0);
         // Beim Ziehen nur innerhalb des geladenen Eintrags mitspringen; der Wechsel kommt beim Loslassen
         if ready && moved && (!prog_mode || k == st.prog_cur) {
-            // Fein gezoomt gleich bildgenau, sonst schnell am Schlüsselbild
-            let exact = st.step_exact && mpp * 30.0 < 2_000.0;
+            let exact = press_exact(st.playing, st.step_exact && mpp * 30.0 < 2_000.0);
             st.seek_time(lt, exact);
             st.strip.drag_live = Some((t, Instant::now()));
         }
     }
-    if let Some(t) = final_seek {
+    if let Some((t, live_at)) = final_seek {
         let (k, lt) = local(t);
-        if prog_mode {
+        if !release_needs_seek(st.playing, live_at, t) && (!prog_mode || k == st.prog_cur) {
+            // Läuft schon an dieser Stelle weiter; ein zweiter Sprung dorthin ließe das Bild
+            // um die Dauer des Klicks zurück- und wieder vorspringen.
+        } else if prog_mode {
             st.prog_goto(k, lt);
         } else {
             let exact = st.step_exact;
             st.seek_time(lt, exact);
+        }
+    }
+}
+
+/// Sprung beim Drücken auf die Zeitleiste: während der Wiedergabe gleich bildgenau (dann
+/// braucht es beim Loslassen keinen zweiten Sprung), sonst fein gezoomt bildgenau und
+/// grob gezoomt schnell am Schlüsselbild.
+fn press_exact(playing: bool, fine_zoom: bool) -> bool {
+    playing || fine_zoom
+}
+
+/// Braucht es beim Loslassen noch einen Sprung? Nicht, wenn die Wiedergabe läuft und beim
+/// Drücken schon an dieselbe Stelle (±20 ms) gesprungen wurde.
+fn release_needs_seek(playing: bool, live_at: Option<f64>, t: f64) -> bool {
+    !(playing && live_at.is_some_and(|l| (l - t).abs() <= 20.0))
+}
+
+impl PreviewState {
+    /// Nur für Prüfläufe: Drücken bzw. Loslassen auf der Zeitleiste an der Stelle `t`
+    /// (ganzer Titel, ohne „Alle Schnitte“), mit derselben Entscheidung wie die Zeitleiste.
+    #[cfg(debug_assertions)]
+    pub(super) fn strip_click_for_test(&mut self, t: f64, release: bool) {
+        if !release {
+            let exact = press_exact(self.playing, false);
+            self.seek_time(t, exact);
+            self.strip.drag_live = Some((t, Instant::now()));
+        } else {
+            let live_at = self.strip.drag_live.take().map(|d| d.0);
+            if release_needs_seek(self.playing, live_at, t) {
+                let exact = self.step_exact;
+                self.seek_time(t, exact);
+            }
         }
     }
 }
@@ -1800,7 +1844,8 @@ impl App {
                     let moved = st.drag_live.is_none_or(|(last, _)| (last - t).abs() > 40.0);
                     // Bei "Alle Schnitte" nur innerhalb des laufenden Eintrags (ein Wechsel lädt neu)
                     if ready && moved && (!prog_mode || k == st.prog_cur) {
-                        st.seek_time(t, false);
+                        let exact = press_exact(st.playing, false);
+                        st.seek_time(t, exact);
                         st.drag_live = Some((t, Instant::now()));
                     }
                     ui.ctx().request_repaint_after(Duration::from_millis(16));
@@ -1840,13 +1885,24 @@ impl App {
                 });
             }
             if resp.drag_stopped() || resp.clicked() {
-                st.drag_live = None;
+                let live_at = st.drag_live.take().map(|d| d.0);
                 if let Some(f) = st.drag.take() {
-                    if prog_mode {
+                    // Stelle wie beim Drücken: Eintrag und Zeit darin
+                    let (k, t) = if prog_mode {
+                        let (offs, _) = st.prog_offsets();
+                        let g = f64::from(f) * g_total;
+                        let k = offs.iter().rposition(|o| *o <= g).unwrap_or(0);
+                        (k, st.prog.get(k).map(|c| c.1 + (g - offs[k])).unwrap_or(0.0))
+                    } else {
+                        (st.prog_cur, lo + f64::from(f) * (hi - lo))
+                    };
+                    if !release_needs_seek(st.playing, live_at, t) && (!prog_mode || k == st.prog_cur) {
+                        // Läuft schon an dieser Stelle weiter (kein Zurückspringen um die Klickdauer)
+                    } else if prog_mode {
                         st.prog_seek_global(f64::from(f) * g_total);
                     } else {
                         let exact = st.step_exact;
-                        st.seek_time(lo + f64::from(f) * (hi - lo), exact);
+                        st.seek_time(t, exact);
                     }
                 }
             }
@@ -2043,5 +2099,23 @@ impl App {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod click_tests {
+    use super::{press_exact, release_needs_seek};
+
+    #[test]
+    fn click_while_playing_jumps_once() {
+        // Wiedergabe: Drücken springt bildgenau, Loslassen an derselben Stelle nicht noch einmal
+        assert!(press_exact(true, false));
+        assert!(!release_needs_seek(true, Some(9_100.0), 9_105.0));
+        // Gezogen bis woandershin, oder angehalten: beim Loslassen bildgenau dorthin
+        assert!(release_needs_seek(true, Some(9_100.0), 9_400.0));
+        assert!(release_needs_seek(false, Some(9_100.0), 9_100.0));
+        assert!(release_needs_seek(true, None, 9_100.0));
+        // Angehalten und grob gezoomt: beim Drücken schnell am Schlüsselbild
+        assert!(!press_exact(false, false));
     }
 }

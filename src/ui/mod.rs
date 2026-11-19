@@ -1076,7 +1076,7 @@ impl App {
         self.apply_dev_state(ctx);
         // Bei der Zeitleiste länger warten, bis die Standbilder da sind
         #[cfg(debug_assertions)]
-        let wait = if self.dev_state.as_deref().is_some_and(|s| s.starts_with("timeline")) { 400 } else { 120 };
+        let wait = if self.dev_state.as_deref().is_some_and(|s| s.starts_with("timeline") || s == "seekclick") { 400 } else { 120 };
         #[cfg(not(debug_assertions))]
         let wait = 120;
         if self.frames >= wait && !self.shot_requested {
@@ -1164,6 +1164,23 @@ impl App {
                 }
                 let _ = std::fs::write(std::env::var("DISCSLIM_DEV_LOG").unwrap_or_else(|_| "devlog.txt".into()), log);
                 self.dev_state = Some("mergeproj-fertig".into());
+            }
+            // Klick auf die Zeitleiste während der Wiedergabe nachstellen: Taste 4 Bilder lang
+            // gedrückt (Sprung zum Schlüsselbild je Bild), dann loslassen (bildgenauer Sprung)
+            ("seekclick", 20) => {
+                self.sel = Selection::Source(0);
+                self.preview.dirty = true;
+            }
+            ("seekclick", 60) => self.preview.play(),
+            ("seekclick", n) if n == 120 || n == 132 => {
+                if let Ok(log) = std::env::var("DISCSLIM_FRAMELOG") {
+                    use std::io::Write;
+                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log) {
+                        let _ = writeln!(f, "--- Klick, Bild {n} ---");
+                    }
+                }
+                // Wie die Zeitleiste: Drücken, 12 Bilder (etwa 0,15 s) später Loslassen
+                self.preview.strip_click_for_test(9_100.0, n == 132);
             }
             ("filecheck", 5) => {
                 // „Datei prüfen“ mit den Dateien aus DISCSLIM_CHECK (durch | getrennt)
