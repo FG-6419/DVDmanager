@@ -36,8 +36,8 @@ pub enum Output {
     /// Wie Vob, aber als schlichter MPEG-2-Programmstrom: Bild und eine Tonspur,
     /// ohne Navigationspakete, Untertitel und Füllpakete. udio: gewünschte Spur.
     Mpeg { path: PathBuf, audio: Option<u8> },
-    /// Wie Mpeg, aber als Matroska-Datei (MKV) mit Kapiteln.
-    Mkv { path: PathBuf, audio: Option<u8> },
+    /// Matroska-Datei (MKV) mit Kapiteln, allen gewählten Tonspuren und Untertiteln.
+    Mkv { path: PathBuf },
 }
 
 pub struct BackupRequest {
@@ -878,6 +878,45 @@ fn run_vob(disc: &Disc, plan: &Plan, path: &Path, ctx: &mut Ctx, mpeg: Option<Op
     Ok(u64::from(new_pos))
 }
 
+/// Sprachen und Untertitel-Farben für die MKV-Ausgabe, aus den Titeln der Einträge.
+/// Untertitel: je gewählter Spur die Unterstromnummer, die zum Bildformat passt.
+fn mkv_meta(disc: &Disc, plan: &Plan) -> crate::engine::mkv::MkvMeta {
+    let mut meta = crate::engine::mkv::MkvMeta::default();
+    for e in &plan.reauthor {
+        let Some(t) = disc.titles.get(e.title) else { continue };
+        for a in &t.audio {
+            let slot = &mut meta.audio_lang[usize::from(a.phys & 7)];
+            if slot.is_empty() {
+                *slot = a.attr.lang.clone();
+            }
+        }
+        let pgc = disc.vts.get(&t.vts).and_then(|v| t.pgcs.first().and_then(|p| v.pgcs.get(*p)));
+        for s in &t.subs {
+            if !s.phys.iter().any(|ph| e.settings.subs[usize::from(*ph & 0x1F)]) {
+                continue;
+            }
+            // Je Spur gibt es Unterströme für 4:3, Breitbild, Letterbox und Pan&Scan;
+            // es gilt der zum Bild passende (Breitbild bzw. 4:3).
+            let ctl = pgc.map(|p| p.sub_ctl[s.logical]).unwrap_or(0);
+            let id = if t.video.wide { (ctl >> 16) & 0x1F } else { (ctl >> 24) & 0x1F } as u8;
+            let id = if ctl == 0 { s.phys.first().copied().unwrap_or(0) } else { id };
+            if !meta.subs.iter().any(|(x, _)| *x == id) {
+                meta.subs.push((id, s.attr.lang.clone()));
+            }
+        }
+        if meta.palette.is_none() {
+            if let Some(pgc) = pgc.filter(|p| p.palette.iter().any(|c| *c != 0)) {
+                let mut pal = [0u32; 16];
+                for (k, c) in pgc.palette.iter().enumerate() {
+                    pal[k] = crate::dvd::ifo::ycrcb_to_rgb(*c);
+                }
+                meta.palette = Some(pal);
+            }
+        }
+    }
+    meta
+}
+
 /// Setzt die Spurnummer eines Tonpakets (DVD-Unterstrom bzw. MPEG-Ton-Strom).
 fn renumber_audio(s: &mut [u8], phys: u8) {
     let h = crate::dvd::vob::pack_header_len(s);
@@ -990,13 +1029,13 @@ fn run_inner(req: &BackupRequest, tx: &Sender<BackupMsg>, cancel: &AtomicBool) -
     let single = match &req.output {
         Output::Vob(p) => Some((p, None, false)),
         Output::Mpeg { path, audio } => Some((path, Some(*audio), false)),
-        Output::Mkv { path, audio } => Some((path, Some(*audio), true)),
+        // MKV: erst eine VOB mit allen gewählten Spuren daneben, die dann umgepackt wird
+        Output::Mkv { path } => Some((path, None, true)),
         _ => None,
     };
     if let Some((path, mpeg, mkv)) = single {
         guard_source(disc, &req.output, path)?;
-        // MKV: erst ein MPEG-2-Strom daneben, der dann umgepackt wird
-        let stream_path = if mkv { path.with_extension("mkv-arbeitsdatei.mpg") } else { path.clone() };
+        let stream_path = if mkv { path.with_extension("mkv-arbeitsdatei.vob") } else { path.clone() };
         let mut ctx = Ctx {
             tx,
             cancel,
@@ -1026,7 +1065,8 @@ fn run_inner(req: &BackupRequest, tx: &Sender<BackupMsg>, cancel: &AtomicBool) -
                 }
                 !cancel.load(Ordering::Relaxed)
             };
-            let res = crate::engine::mkv::remux(&stream_path, path, &chapters, &mut progress);
+            let meta = mkv_meta(disc, &req.plan);
+            let res = crate::engine::mkv::remux(&stream_path, path, &chapters, &meta, &mut progress);
             let _ = std::fs::remove_file(&stream_path);
             match res {
                 Ok(bytes) => sectors = bytes.div_ceil(SECTOR as u64),
@@ -1230,7 +1270,7 @@ fn run_many_inner(mut reqs: Vec<BackupRequest>, tx: &Sender<BackupMsg>, cancel: 
         }
     }
     let check = if !checked.is_empty() && checked.iter().all(|c| c.is_clean()) {
-        Some(CheckReport { audio_breaks: Vec::new(), time_jumps: Vec::new(), seconds: checked.iter().map(|c| c.seconds).sum(), tracks: checked[0].tracks })
+        Some(CheckReport { seconds: checked.iter().map(|c| c.seconds).sum(), tracks: checked[0].tracks, ..Default::default() })
     } else {
         None
     };

@@ -2,6 +2,13 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.051 · 2026-11-19 11:11
+
+- MKV mit allen Spuren: Der MKV-Export übernimmt jetzt alle in den Einträgen angehakten Tonspuren und die DVD-Untertitel (als VobSub, mit Bildgröße und Farbpalette der DVD), jeweils mit Sprache und Namen („Deutsch“, „Englisch“). Die erste Tonspur ist voreingestellt, Untertitel sind zuschaltbar. Die Auswahl einer einzelnen Tonspur gibt es nur noch bei MPEG-2.
+- Namensvorlage beim Export als Einzeldateien: Ein Feld „Dateinamen“ mit Platzhaltern {Name} (Titelname), {Nr} (laufende Nummer, zweistellig) und {DVD} (Name der DVD bzw. Datei), z. B. „Serie S01E{Nr} - {Name}“. Bei {Nr} lässt sich die erste Nummer einstellen; gezählt werden nur die gewählten Titel. Der Zusatz „_Neu“ kommt weiterhin ans Ende. Die Vorlage bleibt gespeichert.
+- Neu: „Datei prüfen“ (Stethoskop oben rechts). Untersucht VOB- und MPEG-Dateien und meldet mit Zeitangaben: Ton oder Bild kommt zu spät beim Player an (dort stocken Player), verfälschte AC3-Rahmen (Prüfsumme), zerrissene Tonrahmen, Zeitsprünge im Ton und eine rückwärts laufende Systemuhr. Eine 21-Minuten-Folge ist in etwa einer Sekunde geprüft.
+- Umpacken von VOB-/MPEG-Dateien: Beginnt der Ton erst deutlich nach dem Bild, wartet das Umpacken jetzt auch am Dateianfang auf ihn; bisher kam er dort zu spät an.
+
 ## 1.0.050 · 2026-11-18 10:04
 
 - Umpacken von VOB-/MPEG-Dateien: Der Ton kommt jetzt gleichmäßig 120 ms vor seiner Abspielzeit beim Player an, wie auf gekauften DVDs (dort etwa 100 ms). In 1.0.049 waren es über 260 ms, was den kleinen Tonpuffer mancher Hardware-Player überfüllen kann. Dafür läuft die Systemuhr einer VOBU jetzt gleichmäßig über ihre ganze Dauer, statt am Anfang gedrängt; das Bild kommt 200–260 ms vor seiner Dekodierzeit. Gemessen an einer echten Folge mit zwei Tonspuren: beide Spuren 117–120 ms, nirgends zu spät. Umgepackte Kopien im Zwischenspeicher werden dafür einmal neu angelegt.

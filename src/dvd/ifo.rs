@@ -215,6 +215,21 @@ pub struct Pgc {
     pub program_map: Vec<u8>,
     pub cells: Vec<CellPlay>,
     pub next_pgc: u16,
+    /// Farbtabelle der Untertitel: 16 Einträge 0x00YYCrCb
+    pub palette: [u32; 16],
+}
+
+/// Farbe der Untertitel-Palette (0x00YYCrCb) als RGB (0xRRGGBB).
+pub fn ycrcb_to_rgb(c: u32) -> u32 {
+    let y = f64::from((c >> 16) & 0xFF);
+    let cr = f64::from((c >> 8) & 0xFF) - 128.0;
+    let cb = f64::from(c & 0xFF) - 128.0;
+    let y = 1.164 * (y - 16.0);
+    let clip = |v: f64| v.round().clamp(0.0, 255.0) as u32;
+    let r = clip(y + 1.596 * cr);
+    let g = clip(y - 0.813 * cr - 0.391 * cb);
+    let b = clip(y + 2.018 * cb);
+    (r << 16) | (g << 8) | b
 }
 
 pub fn parse_pgc(d: &[u8], off: usize) -> Option<Pgc> {
@@ -232,6 +247,9 @@ pub fn parse_pgc(d: &[u8], off: usize) -> Option<Pgc> {
         p.sub_ctl[i] = be32(d, off + 0x1C + i * 4);
     }
     p.next_pgc = be16(d, off + 0x9C);
+    for i in 0..16 {
+        p.palette[i] = be32(d, off + 0xA4 + i * 4);
+    }
     let pm = be16(d, off + 0xE6) as usize;
     let cp = be16(d, off + 0xE8) as usize;
     let cs = be16(d, off + 0xEA) as usize;

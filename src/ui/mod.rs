@@ -1,5 +1,6 @@
 //! Die Anwendung: Zustand, Hintergrundarbeiten und der Bildaufbau je Frame.
 
+mod check;
 mod dialogs;
 mod preview;
 mod queue;
@@ -103,6 +104,11 @@ pub struct BackupDialog {
     /// Einzeldateien: Zusatz an jeden Dateinamen hängen (z. B. „_Neu“)
     pub suffix_on: bool,
     pub suffix: String,
+    /// Einzeldateien: Namensvorlage mit {Name}, {Nr}, {DVD} und erste Nummer
+    pub template: String,
+    pub start_nr: u32,
+    /// Name der DVD bzw. Datei (für {DVD})
+    pub label: String,
     /// Schreibweise der Dateiendungen (aus den Einstellungen)
     pub ext: ExtStyle,
 }
@@ -154,6 +160,8 @@ pub struct Prefs {
     /// Export als Einzeldateien: Zusatz an die Dateinamen hängen, und welcher
     pub file_suffix_on: bool,
     pub file_suffix: String,
+    /// Export als Einzeldateien: Namensvorlage
+    pub file_template: String,
     /// Vorschau mit Kompression, Schnittansicht, bildgenau als Vorgabe für neue Schnitte
     pub compressed: bool,
     pub cut_view: bool,
@@ -209,6 +217,7 @@ impl Default for Prefs {
             vob_keep_target: true,
             file_suffix_on: false,
             file_suffix: "_Neu".into(),
+            file_template: "{Name}".into(),
             compressed: false,
             cut_view: false,
             cut_exact: false,
@@ -288,6 +297,8 @@ pub struct App {
     queue_open: bool,
     /// Szenenerkennung für einen Eintrag
     scene_dlg: Option<scenes::SceneDialog>,
+    /// „Datei prüfen“: laufende Prüfung bzw. ihr Bericht
+    file_check: Option<check::FileCheck>,
     /// Zuletzt gewählte Orte in dieser Sitzung (zum Laden bzw. Speichern)
     last_load_dir: Option<PathBuf>,
     last_save_dir: Option<PathBuf>,
@@ -390,6 +401,9 @@ impl App {
             if let Some(v) = st.get_string("file_suffix") {
                 prefs.file_suffix = v;
             }
+            if let Some(v) = st.get_string("file_template") {
+                prefs.file_template = v;
+            }
             for (key, slot) in [
                 ("no_split", &mut prefs.no_split),
                 ("remove_puo", &mut prefs.remove_puo),
@@ -473,6 +487,7 @@ impl App {
             queue: Queue::default(),
             queue_open: false,
             scene_dlg: None,
+            file_check: None,
             last_load_dir: None,
             last_save_dir: None,
             last_project_dir: None,
@@ -1096,7 +1111,14 @@ impl App {
                 self.open_backup_dialog();
                 if let Some(d) = self.backup_dlg.as_mut() {
                     d.suffix_on = true;
+                    d.template = "Serie S01E{Nr} - {Name}".into();
+                    d.start_nr = 9;
                 }
+            }
+            ("filecheck", 5) => {
+                // „Datei prüfen“ mit den Dateien aus DISCSLIM_CHECK (durch | getrennt)
+                let files: Vec<PathBuf> = std::env::var("DISCSLIM_CHECK").unwrap_or_default().split('|').filter(|s| !s.is_empty()).map(PathBuf::from).collect();
+                self.start_file_check(ctx, files);
             }
             ("backupfile" | "backupsep" | "backupone", 5) => {
                 // Export als Datei mit allen Titeln in der Liste; wahlweise als Einzeldateien.
@@ -1651,6 +1673,7 @@ impl App {
                     time_jumps: if bad { vec![1245.0] } else { Vec::new() },
                     seconds: 1830.0,
                     tracks: 1,
+                    ..Default::default()
                 };
                 self.result = Some(JobResult::Ok(BackupSummary {
                     path: PathBuf::from(r"D:\Filme\Szenen.mpg"),
@@ -1862,6 +1885,7 @@ impl eframe::App for App {
         storage.set_string("project_dir", self.prefs.project_dir.clone());
         storage.set_string("file_dir", self.prefs.file_dir.clone());
         storage.set_string("file_suffix", self.prefs.file_suffix.clone());
+        storage.set_string("file_template", self.prefs.file_template.clone());
         let p = &self.prefs;
         for (key, v) in [
             ("no_split", p.no_split),

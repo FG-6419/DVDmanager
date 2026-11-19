@@ -356,7 +356,8 @@ fn check_mkv(path: &Path) -> (Vec<u64>, usize, usize, f64) {
                         let rel = i16::from_be_bytes([d[b.2 + 1], d[b.2 + 2]]);
                         times.push(last_cluster.unwrap_or(0) as i64 + i64::from(rel));
                     }
-                    0x82 => audio += 1,
+                    // Ton: alle weiteren Spuren mit einfachen Blöcken (Untertitel stehen in Blockgruppen)
+                    0x82..=0x89 => audio += 1,
                     x => panic!("unbekannte Spur {x:X}"),
                 },
                 _ => {}
@@ -400,7 +401,7 @@ fn separate_files() {
             let only: Vec<bool> = (0..2).map(|k| k == i).collect();
             let p = plan.for_single_file(&disc, &only, false);
             let path = w.join(format!("{}.mkv", names[i]));
-            BackupRequest { disc: disc.clone(), plan: p, output: Output::Mkv { path, audio: None }, deep_analysis: i == 0 }
+            BackupRequest { disc: disc.clone(), plan: p, output: Output::Mkv { path }, deep_analysis: i == 0 }
         })
         .collect();
     let (tx, rx) = channel();
@@ -451,8 +452,8 @@ fn mkv_with_chapters() {
         plan.reauthor.push(e);
     }
     let out = w.join("film.mkv");
-    let s = run_backup(open_analysed(&src), plan.clone(), Output::Mkv { path: out.clone(), audio: None });
-    assert!(!w.join("film.mkv-arbeitsdatei.mpg").exists(), "Arbeitsdatei bleibt liegen");
+    let s = run_backup(open_analysed(&src), plan.clone(), Output::Mkv { path: out.clone() });
+    assert!(!w.join("film.mkv-arbeitsdatei.vob").exists(), "Arbeitsdatei bleibt liegen");
     let (chapters, video, audio, duration) = check_mkv(&out);
     println!("Kapitel {chapters:?}, {video} Bilder, {audio} Tonblöcke, {duration} ms, Prüfung {:?}", s.check);
     let want = [0, lens[0], lens[0] + lens[1], lens[0] + lens[1] + lens[2] / 2];
@@ -468,9 +469,77 @@ fn mkv_with_chapters() {
     // Ohne die Option: nur die eigene Marke und Kapitel 1
     plan.chapters_at_cuts = false;
     let out = w.join("ohne.mkv");
-    run_backup(open_analysed(&src), plan, Output::Mkv { path: out.clone(), audio: None });
+    run_backup(open_analysed(&src), plan, Output::Mkv { path: out.clone() });
     let (chapters, ..) = check_mkv(&out);
     assert_eq!(chapters.len(), 2, "{chapters:?}");
+}
+
+/// Spuren einer MKV-Datei: (Nummer, Art, Codec, Sprache) und Blöcke je Spur.
+fn mkv_tracks(path: &Path) -> (Vec<(u64, u64, String, String)>, std::collections::BTreeMap<u8, usize>) {
+    let d = std::fs::read(path).unwrap();
+    let top = ebml_children(&d, 0, d.len());
+    let seg = top.iter().find(|e| e.0 == 0x1853_8067).unwrap();
+    let kids = ebml_children(&d, seg.2, seg.2 + seg.3);
+    let tracks = kids.iter().find(|e| e.0 == 0x1654_AE6B).unwrap();
+    let mut out = Vec::new();
+    for t in ebml_children(&d, tracks.2, tracks.2 + tracks.3) {
+        let f = ebml_children(&d, t.2, t.2 + t.3);
+        let num = f.iter().find(|e| e.0 == 0xD7).map(|e| ebml_uint(&d, e.2, e.3)).unwrap();
+        let kind = f.iter().find(|e| e.0 == 0x83).map(|e| ebml_uint(&d, e.2, e.3)).unwrap();
+        let s = |id: u32| f.iter().find(|e| e.0 == id).map(|e| String::from_utf8_lossy(&d[e.2..e.2 + e.3]).to_string()).unwrap_or_default();
+        out.push((num, kind, s(0x86), s(0x22_B59C)));
+    }
+    let mut blocks = std::collections::BTreeMap::new();
+    for c in kids.iter().filter(|e| e.0 == 0x1F43_B675) {
+        for b in ebml_children(&d, c.2, c.2 + c.3) {
+            let at = match b.0 {
+                0xA3 => b.2,
+                0xA0 => ebml_children(&d, b.2, b.2 + b.3).into_iter().find(|e| e.0 == 0xA1).unwrap().2,
+                _ => continue,
+            };
+            *blocks.entry(d[at] & 0x7F).or_insert(0) += 1;
+        }
+    }
+    (out, blocks)
+}
+
+/// MKV-Ausgabe mit allen Tonspuren und Untertiteln, samt Sprachen.
+#[test]
+fn mkv_with_all_tracks() {
+    let w = work("mkv-spuren");
+    let src = demo::build_sample(&w, |_| {}).unwrap();
+    let disc = open_analysed(&src);
+    let ti = longest_title(&disc);
+    let t = &disc.titles[ti];
+    assert!(t.audio.len() >= 2 && !t.subs.is_empty(), "Beispiel-DVD sollte zwei Tonspuren und Untertitel haben");
+    let mut plan = Plan::new(NO_TARGET);
+    plan.mode = Mode::Reauthor;
+    plan.reauthor.push(ReauthorEntry::new(ti, 0, t.chapters.len() - 1, ItemSettings::default()));
+    let out = w.join("alle.mkv");
+    run_backup(open_analysed(&src), plan.clone(), Output::Mkv { path: out.clone() });
+    assert!(!w.join("alle.mkv-arbeitsdatei.vob").exists(), "Arbeitsdatei bleibt liegen");
+    let (tracks, blocks) = mkv_tracks(&out);
+    println!("Spuren {tracks:?}, Blöcke {blocks:?}");
+    let audio: Vec<_> = tracks.iter().filter(|t| t.1 == 2).collect();
+    let subs: Vec<_> = tracks.iter().filter(|t| t.1 == 0x11).collect();
+    assert_eq!(audio.len(), t.audio.len(), "alle Tonspuren");
+    assert_eq!(audio.iter().map(|t| t.3.as_str()).collect::<Vec<_>>(), vec!["ger", "eng"]);
+    assert_eq!(subs.len(), t.subs.len(), "alle Untertitel");
+    assert!(subs.iter().all(|s| s.2 == "S_VOBSUB"));
+    assert_eq!(subs[0].3, "ger");
+    for tr in &tracks {
+        assert!(blocks.get(&(tr.0 as u8)).copied().unwrap_or(0) > 0, "Spur {} ({}) ohne Daten", tr.0, tr.2);
+    }
+    // Abgewählte zweite Tonspur und Untertitel fehlen dann
+    let mut p2 = plan;
+    let second = t.audio[1].phys as usize;
+    p2.reauthor[0].settings.audio[second] = false;
+    p2.reauthor[0].settings.subs = [false; 32];
+    let out2 = w.join("eine.mkv");
+    run_backup(open_analysed(&src), p2, Output::Mkv { path: out2.clone() });
+    let (tracks, _) = mkv_tracks(&out2);
+    assert_eq!(tracks.iter().filter(|t| t.1 == 2).count(), 1, "{tracks:?}");
+    assert_eq!(tracks.iter().filter(|t| t.1 == 0x11).count(), 0, "{tracks:?}");
 }
 
 /// Mittlere Farbe (R, G, B) des Bildes an einer Stelle eines Titels.
@@ -868,10 +937,11 @@ fn open_single_mpeg_and_vob_files() {
     {
         let data = std::fs::read(&vob).unwrap();
         let secs: Vec<&[u8]> = data.chunks_exact(SECTOR).collect();
-        // Jedes Tonpaket wandert 150 Pakete weiter nach hinten.
+        // Jedes Tonpaket wandert DELAY Pakete weiter nach hinten.
+        const DELAY: usize = 600;
         let (mut out, mut held): (Vec<u8>, std::collections::VecDeque<(usize, &[u8])>) = (Vec::new(), Default::default());
         for (n, s) in secs.iter().enumerate() {
-            while held.front().is_some_and(|(k, _)| n >= k + 150) {
+            while held.front().is_some_and(|(k, _)| n >= k + DELAY) {
                 out.extend_from_slice(held.pop_front().unwrap().1);
             }
             let h = pack_header_len(s);
@@ -884,15 +954,32 @@ fn open_single_mpeg_and_vob_files() {
         for (_, s) in held {
             out.extend_from_slice(s);
         }
+        // Die Systemuhr läuft nach Position weiter (wie bei einem echten, schlecht gemischten
+        // Strom): Jedes Paket bekommt die Uhr des ursprünglichen Pakets an seiner Stelle.
+        for (k, s) in out.chunks_exact_mut(SECTOR).enumerate() {
+            s[4..10].copy_from_slice(&secs[k][4..10]);
+        }
         std::fs::write(&late, out).unwrap();
+    }
+    // „Datei prüfen“ erkennt den nachhinkenden Ton, die unveränderte Datei ist sauber.
+    {
+        use discslim::engine::inspect::{inspect, InspectOpts};
+        let opts = InspectOpts { verify: true, continuous: true, sheet: None };
+        let bad = inspect(&[vec![late.clone()]], &opts, &mut |_| true).unwrap().0.unwrap();
+        assert!(!bad.late_audio.is_empty(), "zu später Ton nicht erkannt: {bad:?}");
+        assert!(bad.late_video.is_empty() && bad.scr_back.is_empty(), "{bad:?}");
+        let good = inspect(&[vec![vob.clone()]], &opts, &mut |_| true).unwrap().0.unwrap();
+        assert!(good.is_clean_full(), "{good:?}");
     }
     let ls = open_source(&late, &mut |_, _| true).unwrap();
     if let Some(discslim::dvd::source::FileRef::Disk(p)) = ls.files.get("VTS_01_1.VOB") {
         let data = std::fs::read(p).unwrap();
         let mut worst = i64::MAX;
         let mut most = i64::MIN;
+        let mut late_at = Vec::new();
+        let n_sec = data.len() / SECTOR;
         let mut streams = std::collections::BTreeSet::new();
-        for s in data.chunks_exact(SECTOR) {
+        for (k, s) in data.chunks_exact(SECTOR).enumerate() {
             let h = pack_header_len(s);
             if s[h + 3] != 0xBD || s[h + 7] & 0x80 == 0 {
                 continue;
@@ -905,9 +992,12 @@ fn open_single_mpeg_and_vob_files() {
             let lead = read_ts(&s[h + 9..]) as i64 - scr;
             worst = worst.min(lead);
             most = most.max(lead);
+            if lead <= 0 && late_at.len() < 8 {
+                late_at.push((k, lead / 90));
+            }
         }
         assert!(streams.len() >= 2, "Testdatei sollte zwei Tonspuren haben: {streams:?}");
-        assert!(worst > 0, "Tonpaket kommt {} ms zu spät", -worst / 90);
+        assert!(worst > 0, "Tonpaket kommt {} ms zu spät; Pakete (Nr., ms) {late_at:?} von {n_sec}", -worst / 90);
         // Nicht viel früher als nötig (kleiner Tonpuffer mancher Hardware-Player)
         assert!(most < 200 * 90, "Tonpaket kommt {} ms vor seiner Zeit", most / 90);
     } else {
@@ -970,7 +1060,7 @@ fn real_project_backup() {
     if std::env::var("DVDMANAGER_REAL_MKV").is_ok() {
         plan.chapters_at_cuts = true;
         let out = w.join("projekt.mkv");
-        let s = run_backup(disc, plan.clone(), Output::Mkv { path: out.clone(), audio: None });
+        let s = run_backup(disc, plan.clone(), Output::Mkv { path: out.clone() });
         let (chapters, video, audio, duration) = check_mkv(&out);
         println!("{} Einträge, Kapitel {chapters:?}, {video} Bilder, {audio} Tonblöcke, {duration} ms, Prüfung: {:?}", plan.reauthor.len(), s.check);
         return;

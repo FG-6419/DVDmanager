@@ -98,8 +98,9 @@ pub fn open_sources(paths: &[PathBuf], progress: &mut dyn FnMut(f32, &str) -> bo
     Ok(s)
 }
 
-/// Stand des Umpackens; 2: Tonspuren nach Zeit verzahnt, 3: Ton mit festem Vorlauf
-const IMPORT_VERSION: u32 = 3;
+/// Stand des Umpackens; 2: Tonspuren nach Zeit verzahnt, 3: Ton mit festem Vorlauf,
+/// 4: wartet auch auf spät beginnenden Ton
+const IMPORT_VERSION: u32 = 4;
 
 fn cache_root() -> PathBuf {
     std::env::temp_dir().join("DVDmanager-Import")
@@ -704,7 +705,9 @@ impl Importer {
             let end = g.pics.iter().filter_map(|p| p.4).max();
             let ready = self.pending.len() > MAX_PENDING
                 || end.is_none()
-                || self.audio.iter().all(|a| a.last_src.is_some_and(|l| l >= end.unwrap_or(0) + AUDIO_AHEAD));
+                // Noch keine Tonspur gesehen: warten (der Ton kann deutlich später beginnen);
+                // Dateien ganz ohne Ton laufen über die Obergrenze weiter.
+                || (!self.audio.is_empty() && self.audio.iter().all(|a| a.last_src.is_some_and(|l| l >= end.unwrap_or(0) + AUDIO_AHEAD)));
             if !ready {
                 break;
             }

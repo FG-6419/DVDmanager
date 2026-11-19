@@ -29,12 +29,44 @@ pub struct CheckReport {
     /// Geprüfte Länge (Sekunden) und Zahl der Tonspuren
     pub seconds: f64,
     pub tracks: usize,
+    /// Stellen mit AC3-Rahmen, deren Prüfsumme nicht stimmt (verfälschter Ton)
+    pub crc_errors: Vec<f64>,
+    /// Stellen, an denen Ton bzw. Bild erst nach seiner Abspielzeit beim Player ankommt
+    /// (Player stocken dort)
+    pub late_audio: Vec<f64>,
+    pub late_video: Vec<f64>,
+    /// Stellen, an denen die Systemuhr rückwärts läuft (nur bei fortlaufenden Dateien)
+    pub scr_back: Vec<f64>,
 }
 
 impl CheckReport {
+    /// Fehler, die beim Export selbst entstehen können: zerrissene Tonrahmen, Zeitsprünge.
     pub fn is_clean(&self) -> bool {
         self.audio_breaks.is_empty() && self.time_jumps.is_empty()
     }
+
+    /// Auch alles, was schon in einer Quelle stecken kann (für „Datei prüfen“).
+    pub fn is_clean_full(&self) -> bool {
+        self.is_clean() && self.crc_errors.is_empty() && self.late_audio.is_empty() && self.late_video.is_empty() && self.scr_back.is_empty()
+    }
+}
+
+/// Merkt eine Stelle, aber höchstens eine je Sekunde (sonst würden Tausende gemeldet).
+fn note(list: &mut Vec<f64>, now: f64) {
+    if list.last().is_none_or(|l| now - l >= 1.0) {
+        list.push(now);
+    }
+}
+
+/// Zeitverhalten des Datenstroms: Systemuhr und Ankunft der Pakete.
+#[derive(Default)]
+struct Timing {
+    last_scr: Option<i64>,
+    late_audio: Vec<f64>,
+    late_video: Vec<f64>,
+    scr_back: Vec<f64>,
+    /// LPCM-Spuren (ohne Rahmen, daher nicht Rahmen für Rahmen geprüft, aber mitgezählt)
+    lpcm: std::collections::BTreeSet<u8>,
 }
 
 /// Was beim Lesen geschehen soll.
@@ -63,8 +95,10 @@ pub fn inspect(
     let mut video = VideoScan::new(opts.sheet.as_ref().map(|s| f64::from(s.0.max(1))));
     let mut report = CheckReport::default();
     let mut buf = vec![0u8; SECTOR * 512];
+    let mut timing = Timing::default();
     for group in groups {
         let mut audio: Vec<AudioCheck> = Vec::new();
+        timing.last_scr = None;
         for path in group {
             let mut f = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
             loop {
@@ -73,7 +107,7 @@ pub fn inspect(
                     break;
                 }
                 for s in buf[..n - n % SECTOR].chunks_exact(SECTOR) {
-                    sector(s, &mut video, &mut audio, opts.verify);
+                    sector(s, &mut video, &mut audio, opts.verify.then_some(&mut timing));
                 }
                 done += n as u64;
                 if !progress(done as f32 / total as f32) {
@@ -84,6 +118,7 @@ pub fn inspect(
         for mut a in audio {
             a.process(video.now(), true);
             report.audio_breaks.extend(a.breaks);
+            report.crc_errors.extend(a.crc_errors);
             if opts.continuous {
                 report.time_jumps.extend(a.jumps);
             }
@@ -92,8 +127,16 @@ pub fn inspect(
         video.end_group();
     }
     report.seconds = video.now();
-    report.audio_breaks.sort_by(f64::total_cmp);
-    report.time_jumps.sort_by(f64::total_cmp);
+    report.tracks += timing.lpcm.len();
+    report.late_audio = timing.late_audio;
+    report.late_video = timing.late_video;
+    if opts.continuous {
+        report.scr_back = timing.scr_back;
+    }
+    for l in [&mut report.audio_breaks, &mut report.time_jumps, &mut report.crc_errors] {
+        l.sort_by(f64::total_cmp);
+        l.dedup_by(|b, a| *b - *a < 1.0);
+    }
     let sheet = match &opts.sheet {
         Some((_, path)) if !video.thumbs.is_empty() => {
             write_sheet(&video.thumbs, path)?;
@@ -115,9 +158,26 @@ fn read_full(f: &mut std::fs::File, buf: &mut [u8]) -> std::io::Result<usize> {
     Ok(n)
 }
 
-fn sector(s: &[u8], video: &mut VideoScan, audio: &mut Vec<AudioCheck>, verify: bool) {
+/// Systemuhr eines Pakets (MPEG-2-Kopf) in 90 kHz.
+fn scr90(s: &[u8]) -> Option<i64> {
+    if s[4] & 0xC0 != 0x40 {
+        return None;
+    }
+    let b = &s[4..10];
+    Some((i64::from(b[0] >> 3 & 7) << 30) | (i64::from(b[0] & 3) << 28) | (i64::from(b[1]) << 20) | (i64::from(b[2] >> 3) << 15) | (i64::from(b[2] & 3) << 13) | (i64::from(b[3]) << 5) | i64::from(b[4] >> 3))
+}
+
+fn sector(s: &[u8], video: &mut VideoScan, audio: &mut Vec<AudioCheck>, mut timing: Option<&mut Timing>) {
     if s[..4] != [0, 0, 1, 0xBA] {
         return;
+    }
+    let verify = timing.is_some();
+    let scr = scr90(s);
+    if let (Some(t), Some(c)) = (timing.as_deref_mut(), scr) {
+        if t.last_scr.is_some_and(|l| c < l) {
+            note(&mut t.scr_back, video.now());
+        }
+        t.last_scr = Some(c);
     }
     let mut p = pack_header_len(s);
     while p + 9 <= SECTOR && s[p] == 0 && s[p + 1] == 0 && s[p + 2] == 1 {
@@ -132,6 +192,23 @@ fn sector(s: &[u8], video: &mut VideoScan, audio: &mut Vec<AudioCheck>, verify: 
         }
         let payload = (p + 9 + usize::from(s[p + 8])).min(end);
         let pts = (s[p + 7] & 0x80 != 0 && p + 14 <= end).then(|| read_ts(&s[p + 9..]) as i64);
+        // Kommt das Paket vor seiner Zeit an? Bild: Dekodierzeit (DTS), sonst Abspielzeit.
+        if let (Some(t), Some(c), Some(pts)) = (timing.as_deref_mut(), scr, pts) {
+            let is_audio = (0xC0..=0xC7).contains(&id) || (id == 0xBD && payload < end && (0x80..=0xAF).contains(&s[payload]));
+            let when = if id == 0xE0 && s[p + 7] & 0xC0 == 0xC0 && p + 19 <= end { read_ts(&s[p + 14..]) as i64 } else { pts };
+            // Über den Überlauf der 33-Bit-Uhr hinweg nicht melden
+            if id == 0xBD && payload < end && (0xA0..=0xA7).contains(&s[payload]) {
+                t.lpcm.insert(s[payload]);
+            }
+            let lead = when - c;
+            if lead < 0 && lead > -(1 << 31) {
+                if id == 0xE0 {
+                    note(&mut t.late_video, video.now());
+                } else if is_audio {
+                    note(&mut t.late_audio, video.now());
+                }
+            }
+        }
         match id {
             0xE0 => video.feed(&s[payload..end]),
             0xC0..=0xC7 if verify => feed_audio(audio, id, Codec::Mpeg, &s[payload..end], pts, video.now()),
@@ -174,6 +251,19 @@ struct AudioCheck {
     in_garbage: bool,
     breaks: Vec<f64>,
     jumps: Vec<f64>,
+    crc_errors: Vec<f64>,
+}
+
+/// AC3-Prüfsumme (CRC-16, Polynom 0x8005) über einen Rahmen ohne Sync-Wort: 0, wenn heil.
+fn ac3_crc(frame: &[u8]) -> u16 {
+    let mut c: u16 = 0;
+    for &b in frame.get(2..).unwrap_or(&[]) {
+        c ^= u16::from(b) << 8;
+        for _ in 0..8 {
+            c = if c & 0x8000 != 0 { (c << 1) ^ 0x8005 } else { c << 1 };
+        }
+    }
+    c
 }
 
 impl AudioCheck {
@@ -190,6 +280,7 @@ impl AudioCheck {
             in_garbage: false,
             breaks: Vec::new(),
             jumps: Vec::new(),
+            crc_errors: Vec::new(),
         }
     }
 
@@ -204,6 +295,11 @@ impl AudioCheck {
     }
 
     fn garbage(&mut self, now: f64) {
+        // Vor dem ersten vollständigen Rahmen: Die Datei beginnt mitten in einem Rahmen; das
+        // überspringt jeder Decoder unhörbar.
+        if self.frames == 0 {
+            return;
+        }
         if !self.in_garbage {
             self.breaks.push(now);
             self.in_garbage = true;
@@ -231,6 +327,9 @@ impl AudioCheck {
                 e == self.buf.len()
             };
             if ok {
+                if self.codec == Codec::Ac3 && ac3_crc(&self.buf[pos..e]) != 0 {
+                    note(&mut self.crc_errors, now);
+                }
                 self.frame(pos, now);
                 self.in_garbage = false;
                 pos = e;

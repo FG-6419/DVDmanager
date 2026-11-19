@@ -127,6 +127,9 @@ impl App {
             separate: many_files,
             suffix_on: self.prefs.file_suffix_on,
             suffix: self.prefs.file_suffix.clone(),
+            template: self.prefs.file_template.clone(),
+            start_nr: 1,
+            label: label.clone(),
             separate_dir: file_base.display().to_string(),
             names,
             folder: folder_base.join(&label).display().to_string(),
@@ -210,6 +213,7 @@ impl App {
         self.dialog_backup(ctx);
         self.dialog_queue(ctx);
         self.dialog_scenes(ctx);
+        self.dialog_file_check(ctx);
         self.dialog_job(ctx);
         self.dialog_result(ctx);
         self.dialog_settings(ctx);
@@ -257,7 +261,7 @@ impl App {
                 OutputKind::Burn => tr!("Legt ein ISO-Abbild an und öffnet danach den Windows-Brenner.", "Creates an ISO image and then opens the Windows disc burner."),
                 OutputKind::Vob => tr!("Schreibt die gewählten Titel nacheinander in eine einzige VOB-Datei, ohne DVD-Struktur und Menüs.", "Writes the chosen titles one after another into a single VOB file, without DVD structure and menus."),
                 OutputKind::Mpeg => tr!("Schreibt die gewählten Titel als schlichte MPEG-2-Datei: nur Bild und eine Tonspur, ohne DVD-Navigation und Untertitel.", "Writes the chosen titles as a plain MPEG-2 file: video and one audio track only, without DVD navigation and subtitles."),
-                OutputKind::Mkv => tr!("Wie MPEG-2 (Bild und eine Tonspur, ohne Neukodierung), aber als MKV-Datei mit Kapiteln. VLC, Kodi und viele Fernseher zeigen die Kapitel an.", "Like MPEG-2 (video and one audio track, no re-encoding), but as an MKV file with chapters. VLC, Kodi and many TVs show the chapters."),
+                OutputKind::Mkv => tr!("Eine Datei mit Kapiteln, allen gewählten Tonspuren und den Untertiteln, samt Sprachen, ohne Neukodierung. VLC, Kodi und viele Fernseher zeigen Kapitel und Spuren an.", "One file with chapters, all chosen audio tracks and the subtitles, including languages, without re-encoding. VLC, Kodi and many TVs show chapters and tracks."),
             };
             ui.label(RichText::new(hint).size(13.0).color(p.muted));
             ui.add_space(4.0);
@@ -376,8 +380,21 @@ impl App {
                     }
                 });
                 if separate {
-                    // Zusatz an die Dateinamen, z. B. damit „Film.vob“ neben der Quelle „Film_Neu.vob“ heißt
+                    // Namensvorlage, z. B. „Serie S01E{Nr} - {Name}“; {Nr} zählt ab der Startnummer
                     ui.add_space(2.0);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(tr!("Dateinamen:", "File names:")).color(p.muted));
+                        let edit = egui::TextEdit::singleline(&mut dlg.template).desired_width(230.0).hint_text("{Name}");
+                        ui.add(edit).on_hover_text(tr!(
+                            "Platzhalter: {Name} = Name des Titels, {Nr} = laufende Nummer (01, 02 …), {DVD} = Name der DVD bzw. Datei. Beispiel: „Serie S01E{Nr} - {Name}“",
+                            "Placeholders: {Name} = title name, {Nr} = running number (01, 02 …), {DVD} = name of the DVD or file. Example: \"Series S01E{Nr} - {Name}\""
+                        ));
+                        if dlg.template.contains("{Nr}") || dlg.template.contains("{nr}") {
+                            ui.label(RichText::new(tr!("Nr. ab", "No. from")).color(p.muted));
+                            ui.add(egui::DragValue::new(&mut dlg.start_nr).range(0..=9999).speed(0.2));
+                        }
+                    });
+                    // Zusatz an die Dateinamen, z. B. damit „Film.vob“ neben der Quelle „Film_Neu.vob“ heißt
                     ui.horizontal(|ui| {
                         style::check(ui, &p, &mut dlg.suffix_on, tr!("Zusatz an die Dateinamen hängen:", "Append to the file names:"));
                         let edit = egui::TextEdit::singleline(&mut dlg.suffix).desired_width(120.0).hint_text("_Neu");
@@ -387,7 +404,7 @@ impl App {
                         ));
                     });
                     let ext = file_ext(dlg.kind, &dlg.ext);
-                    let files = separate_names(&dlg.names, &rows, &dlg.vob_sel, dlg.name_suffix());
+                    let files = separate_names(&dlg.names, &rows, &dlg.vob_sel, &dlg.name_rule());
                     let mut shown: Vec<String> = files.iter().take(3).map(|(_, n)| format!("{n}.{ext}")).collect();
                     if files.len() > 3 {
                         shown.push("…".into());
@@ -410,7 +427,7 @@ impl App {
             if !full_done {
                 dlg.deep = deep;
             }
-            if matches!(dlg.kind, OutputKind::Mpeg | OutputKind::Mkv) {
+            if dlg.kind == OutputKind::Mpeg {
                 // Tonspur wählen (aus dem ersten gewählten Titel)
                 let tracks = first_selected_tracks(&disc, &self.plan, &dlg.vob_sel);
                 if dlg.mpeg_audio.is_none_or(|ph| !tracks.iter().any(|t| t.0 == ph)) {
@@ -664,11 +681,12 @@ impl App {
         self.prefs.file_dir = dlg.separate_dir.clone();
         self.prefs.file_suffix_on = dlg.suffix_on;
         self.prefs.file_suffix = dlg.suffix.clone();
+        self.prefs.file_template = dlg.template.clone();
         self.note_save_dir(Path::new(&dlg.separate_dir));
         let rows = vob_rows(disc, &self.plan);
         let dir = PathBuf::from(&dlg.separate_dir);
         let ext = file_ext(dlg.kind, &dlg.ext);
-        separate_names(&dlg.names, &rows, &dlg.vob_sel, dlg.name_suffix())
+        separate_names(&dlg.names, &rows, &dlg.vob_sel, &dlg.name_rule())
             .into_iter()
             .map(|(i, name)| {
                 let only: Vec<bool> = (0..rows.len()).map(|k| k == i).collect();
@@ -676,7 +694,7 @@ impl App {
                 let output = match dlg.kind {
                     OutputKind::Vob => Output::Vob(path),
                     OutputKind::Mpeg => Output::Mpeg { path, audio: dlg.mpeg_audio },
-                    _ => Output::Mkv { path, audio: dlg.mpeg_audio },
+                    _ => Output::Mkv { path },
                 };
                 let mut plan = self.plan.for_single_file(disc, &only, dlg.vob_keep_target);
                 plan.declick = self.prefs.declick;
@@ -726,7 +744,7 @@ impl App {
             OutputKind::Burn => Output::Burn(with_iso_ext(&dlg.iso)),
             OutputKind::Vob => Output::Vob(with_ext_case(&dlg.vob, &file_ext(dlg.kind, &dlg.ext))),
             OutputKind::Mpeg => Output::Mpeg { path: with_ext_case(&dlg.mpg, &file_ext(dlg.kind, &dlg.ext)), audio: dlg.mpeg_audio },
-            OutputKind::Mkv => Output::Mkv { path: with_ext_case(&dlg.mkv, &file_ext(dlg.kind, &dlg.ext)), audio: dlg.mpeg_audio },
+            OutputKind::Mkv => Output::Mkv { path: with_ext_case(&dlg.mkv, &file_ext(dlg.kind, &dlg.ext)) },
         };
         let plan = if matches!(dlg.kind, OutputKind::Vob | OutputKind::Mpeg | OutputKind::Mkv) {
             self.plan.for_single_file(disc, &dlg.vob_sel, dlg.vob_keep_target)
@@ -1214,10 +1232,38 @@ fn live_picture(ui: &mut Ui, p: &style::Pal, tex: Option<(egui::TextureId, Vec2)
     });
 }
 
+/// Wie die Dateinamen beim Export als Einzeldateien entstehen.
+pub(super) struct NameRule<'a> {
+    /// Vorlage mit {Name}, {Nr} und {DVD}; leer gilt wie „{Name}“
+    pub template: &'a str,
+    /// Erste Nummer für {Nr}
+    pub start: u32,
+    /// Zusatz am Ende (z. B. „_Neu“), leer wenn aus
+    pub suffix: &'a str,
+    /// Name der DVD bzw. Datei für {DVD}
+    pub label: &'a str,
+}
+
+impl NameRule<'_> {
+    /// Dateiname (ohne Endung) für den `k`-ten gewählten Titel mit diesem Namen.
+    fn apply(&self, name: &str, k: usize) -> String {
+        let t = self.template.trim();
+        let t = if t.is_empty() { "{Name}" } else { t };
+        let nr = format!("{:02}", self.start as usize + k);
+        let out = t.replace("{Name}", name).replace("{name}", name).replace("{Nr}", &nr).replace("{nr}", &nr).replace("{DVD}", self.label).replace("{dvd}", self.label);
+        format!("{}{}", out.trim(), self.suffix)
+    }
+}
+
 impl BackupDialog {
-    /// Der Zusatz für die Dateinamen beim Export als Einzeldateien (leer, wenn aus).
-    fn name_suffix(&self) -> &str {
-        if self.suffix_on { self.suffix.trim() } else { "" }
+    /// Regel für die Dateinamen beim Export als Einzeldateien.
+    fn name_rule(&self) -> NameRule<'_> {
+        NameRule {
+            template: &self.template,
+            start: self.start_nr,
+            suffix: if self.suffix_on { self.suffix.trim() } else { "" },
+            label: &self.label,
+        }
     }
 }
 
@@ -1233,16 +1279,16 @@ fn file_ext(kind: OutputKind, style: &ExtStyle) -> String {
 
 /// Dateinamen (ohne Endung) für den Export als Einzeldateien: je gewähltem Titel sein
 /// Name (leer: die übliche Bezeichnung), unzulässige Zeichen ersetzt, doppelte durchnummeriert.
-/// `suffix` hängt an jeden Namen (z. B. „_Neu“), damit die Ausgabe neben gleichnamigen
-/// Quelldateien liegen kann.
-fn separate_names(names: &[String], rows: &[String], sel: &[bool], suffix: &str) -> Vec<(usize, String)> {
+/// `rule` setzt den Namen in die Vorlage ein (z. B. „S01E{Nr} - {Name}“) und hängt den
+/// Zusatz an (z. B. „_Neu“), damit die Ausgabe neben gleichnamigen Quelldateien liegen kann.
+fn separate_names(names: &[String], rows: &[String], sel: &[bool], rule: &NameRule) -> Vec<(usize, String)> {
     let mut out: Vec<(usize, String)> = Vec::new();
     for (i, row) in rows.iter().enumerate() {
         if !sel.get(i).copied().unwrap_or(false) {
             continue;
         }
         let name = names.get(i).map(|n| n.trim()).filter(|n| !n.is_empty()).unwrap_or(row);
-        let base = file_stem(&format!("{name}{suffix}"));
+        let base = file_stem(&rule.apply(name, out.len()));
         let mut cand = base.clone();
         let mut k = 2;
         while out.iter().any(|(_, n)| n.eq_ignore_ascii_case(&cand)) {
@@ -1259,7 +1305,7 @@ fn existing_files(d: &BackupDialog, rows: &[String]) -> Vec<String> {
     if d.separate && matches!(d.kind, OutputKind::Vob | OutputKind::Mpeg | OutputKind::Mkv) {
         let dir = PathBuf::from(&d.separate_dir);
         let ext = file_ext(d.kind, &d.ext);
-        return separate_names(&d.names, rows, &d.vob_sel, d.name_suffix())
+        return separate_names(&d.names, rows, &d.vob_sel, &d.name_rule())
             .into_iter()
             .map(|(_, n)| dir.join(format!("{n}.{ext}")))
             .filter(|p| p.exists())
@@ -1484,16 +1530,32 @@ fn vob_rows(disc: &Disc, plan: &Plan) -> Vec<String> {
 
 #[cfg(test)]
 mod name_tests {
-    use super::separate_names;
+    use super::{separate_names, NameRule};
+
+    fn rule<'a>(template: &'a str, start: u32, suffix: &'a str) -> NameRule<'a> {
+        NameRule { template, start, suffix, label: "Serie" }
+    }
+
+    fn names_for(rule: &NameRule, sel: &[bool]) -> Vec<String> {
+        let rows = vec!["Titel 1".to_string(), "Titel 2".to_string(), "Titel 3".to_string()];
+        let names = vec!["Film".to_string(), String::new(), "Film".to_string()];
+        separate_names(&names, &rows, sel, rule).into_iter().map(|(_, n)| n).collect()
+    }
 
     #[test]
     fn suffix_is_appended_before_numbering() {
-        let rows = vec!["Titel 1".to_string(), "Titel 2".to_string(), "Titel 3".to_string()];
-        let names = vec!["Film".to_string(), String::new(), "Film".to_string()];
-        let sel = vec![true, true, true];
-        let got: Vec<String> = separate_names(&names, &rows, &sel, "_Neu").into_iter().map(|(_, n)| n).collect();
-        assert_eq!(got, vec!["Film_Neu", "Titel 2_Neu", "Film_Neu (2)"]);
-        let plain: Vec<String> = separate_names(&names, &rows, &sel, "").into_iter().map(|(_, n)| n).collect();
-        assert_eq!(plain[0], "Film");
+        let all = [true, true, true];
+        assert_eq!(names_for(&rule("{Name}", 1, "_Neu"), &all), vec!["Film_Neu", "Titel 2_Neu", "Film_Neu (2)"]);
+        assert_eq!(names_for(&rule("", 1, ""), &all)[0], "Film");
+    }
+
+    #[test]
+    fn template_counts_only_chosen_titles() {
+        // {Nr} zählt die gewählten Titel ab der Startnummer, zweistellig
+        let got = names_for(&rule("{DVD} S01E{Nr} - {Name}", 9, ""), &[true, false, true]);
+        assert_eq!(got, vec!["Serie S01E09 - Film", "Serie S01E10 - Film"]);
+        // Unzulässige Zeichen werden ersetzt
+        let got = names_for(&rule("{Name}: Teil {Nr}?", 1, "_Neu"), &[true, false, false]);
+        assert!(!got[0].contains(':') && !got[0].contains('?') && got[0].ends_with("_Neu"), "{got:?}");
     }
 }

@@ -151,6 +151,21 @@ impl App {
                         if style::icon_button(ui, &p, ic::INFO, tr!("Über dieses Programm", "About this program")).clicked() {
                             self.about_open = true;
                         }
+                        if style::icon_button(
+                            ui,
+                            &p,
+                            ic::STETHOSCOPE,
+                            tr!(
+                                "Datei prüfen: VOB- oder MPEG-Dateien auf kaputte Tonrahmen, Zeitsprünge und zu spät ankommende Pakete untersuchen",
+                                "Check file: examine VOB or MPEG files for broken audio frames, time jumps and late packets"
+                            ),
+                        )
+                        .clicked()
+                            && self.job.is_none()
+                            && self.loader.is_none()
+                        {
+                            self.open_file_check(ctx);
+                        }
                         if has_disc {
                             let full = self.disc.as_ref().map(|d| d.analysed_full).unwrap_or(false);
                             let tip = if full {
