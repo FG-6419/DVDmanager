@@ -565,11 +565,8 @@ impl App {
                     let group = self.marked.len() > 1 && self.marked.contains(&i);
                     if group {
                         // Markierte Teile desselben Titels wieder zu einem Eintrag machen
-                        let mut chosen: Vec<usize> = self.marked.iter().copied().filter(|k| *k < n).collect();
-                        chosen.sort_unstable();
-                        let parts: Vec<ReauthorEntry> = chosen.iter().map(|k| self.plan.reauthor[*k].clone()).collect();
-                        let check = discslim::engine::plan::merge_entries(disc, &parts);
-                        let label = trf!("{}  {} zu einem zusammenführen", "{}  Merge {} into one", ic::INTERSECT, discslim::i18n::count(chosen.len(), "Eintrag", "Einträge", "entry", "entries"));
+                        let (chosen, check) = self.merge_check(disc);
+                        let label = trf!("{}  {} gewählte Titel zu einem zusammenführen", "{}  Merge {} selected titles into one", ic::INTERSECT, chosen.len());
                         let tip = match &check {
                             Ok(_) => tr!("Macht aus den markierten Teilen wieder einen Eintrag; die Nahtstellen werden Kapitel. Strg+Z macht es rückgängig.", "Turns the marked parts back into one entry; the seams become chapters. Ctrl+Z undoes it.").to_string(),
                             Err(e) => merge_problem_text(e),
@@ -1030,6 +1027,16 @@ impl App {
         self.notice = Some((text, std::time::Instant::now()));
     }
 
+    /// Die markierten Einträge (sortiert) und ob sie sich zusammenführen lassen.
+    pub(super) fn merge_check(&self, disc: &Disc) -> (Vec<usize>, Result<ReauthorEntry, discslim::engine::plan::MergeProblem>) {
+        let len = self.plan.reauthor.len();
+        let mut chosen: Vec<usize> = self.marked.iter().copied().filter(|k| *k < len).collect();
+        chosen.sort_unstable();
+        let parts: Vec<ReauthorEntry> = chosen.iter().map(|k| self.plan.reauthor[*k].clone()).collect();
+        let check = discslim::engine::plan::merge_entries(disc, &parts);
+        (chosen, check)
+    }
+
     /// Führt die Einträge `idx` zu einem zusammen (an der Stelle des ersten in der Liste).
     /// Strg+Z holt die Teile zurück.
     pub(super) fn merge_selected(&mut self, disc: &Disc, mut idx: Vec<usize>) {
@@ -1058,7 +1065,7 @@ impl App {
         self.sel = Selection::Entry(at);
         self.preview.dirty = true;
         self.notice = Some((
-            trf!("{} zu einem zusammengeführt · Strg+Z macht es rückgängig", "{} merged into one · Ctrl+Z undoes it", discslim::i18n::count(idx.len(), "Eintrag", "Einträge", "entry", "entries")),
+            trf!("{} Titel zu einem zusammengeführt · Strg+Z macht es rückgängig", "{} titles merged into one · Ctrl+Z undoes it", idx.len()),
             std::time::Instant::now(),
         ));
     }
@@ -1989,7 +1996,7 @@ pub(super) fn entry_info(disc: &Disc, i: usize, e: &ReauthorEntry) -> Option<(St
 fn merge_problem_text(e: &discslim::engine::plan::MergeProblem) -> String {
     use discslim::engine::plan::MergeProblem as M;
     match e {
-        M::TooFew => tr!("Markiere mindestens zwei Einträge (Strg- oder Umschalt-Klick).", "Mark at least two entries (Ctrl or Shift click).").to_string(),
+        M::TooFew => tr!("Markiere mindestens zwei Titel (Strg- oder Umschalt-Klick).", "Mark at least two titles (Ctrl or Shift click).").to_string(),
         M::DifferentTitles => tr!(
             "Zusammenführen geht nur bei Teilen desselben Titels, z. B. nach „An Kapiteln in Einträge teilen“. Diese Einträge stammen aus verschiedenen Titeln.",
             "Merging only works for parts of the same title, e.g. after \"Split into entries at chapters\". These entries come from different titles."

@@ -2,6 +2,10 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.053 · 2026-11-19 12:19
+
+- Zusammenführen blieb oft grau, obwohl die markierten Titel lückenlos aus einem Titel geschnitten waren. Das Menü zählte die markierten Einträge gegen eine falsche Zahl (die der Kapitelteile des angeklickten Eintrags) und verwarf dabei die hinteren. Jetzt werden alle markierten berücksichtigt. Der Menüpunkt heißt „x gewählte Titel zu einem zusammenführen“.
+
 ## 1.0.052 · 2026-11-19 11:57
 
 - Einträge zusammenführen: Mehrere Einträge in „Neue DVD“ markieren (Strg- oder Umschalt-Klick), Rechtsklick, „… zu einem zusammenführen“. Das geht für Teile desselben Titels, die lückenlos aneinander anschließen, etwa nach „An Kapiteln in Einträge teilen“ oder bei einzeln hinzugefügten Kapiteln; die Reihenfolge in der Liste spielt keine Rolle. Der neue Eintrag steht an der Stelle des ersten markierten, übernimmt dessen Einstellungen und Einblende, die Ausblende des letzten Teils und den Namen ohne „– Teil n“. Die Nahtstellen werden Kapitelmarken (liegen sie auf Kapiteln der DVD, bleiben einfach deren Kapitel). Strg+Z holt die Teile zurück. Bei verschiedenen Titeln oder einer Lücke bleibt der Menüpunkt grau und nennt den Grund.

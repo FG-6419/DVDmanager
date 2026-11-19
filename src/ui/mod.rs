@@ -1146,6 +1146,25 @@ impl App {
                 }
                 let _ = std::fs::write(std::env::var("DISCSLIM_DEV_LOG").unwrap_or_else(|_| "devlog.txt".into()), log);
             }
+            ("mergeproj", 5) if self.disc.is_some() && self.loader.is_none() => {
+                // Geladenes Projekt: wie mit der Maus alle markieren (Klick, Umschalt+Klick) und
+                // prüfen, was das Rechtsklick-Menü anbieten würde; dann zusammenführen.
+                let mut log = String::new();
+                if let Some(d) = self.disc.clone() {
+                    let n = self.plan.reauthor.len();
+                    self.click_entry(0, false, false);
+                    self.click_entry(n.saturating_sub(1), false, true);
+                    let (chosen, check) = self.merge_check(&d);
+                    log += &format!("markiert {:?}, Menü {}\n", chosen, match &check { Ok(_) => "aktiv".to_string(), Err(e) => format!("grau: {e:?}") });
+                    if check.is_ok() {
+                        self.merge_selected(&d, chosen);
+                        let e = &self.plan.reauthor[0];
+                        log += &format!("danach {} Einträge, Schnitt {:?}, Kapitel {}..{}\n", self.plan.reauthor.len(), e.cut, e.first_chapter, e.last_chapter);
+                    }
+                }
+                let _ = std::fs::write(std::env::var("DISCSLIM_DEV_LOG").unwrap_or_else(|_| "devlog.txt".into()), log);
+                self.dev_state = Some("mergeproj-fertig".into());
+            }
             ("filecheck", 5) => {
                 // „Datei prüfen“ mit den Dateien aus DISCSLIM_CHECK (durch | getrennt)
                 let files: Vec<PathBuf> = std::env::var("DISCSLIM_CHECK").unwrap_or_default().split('|').filter(|s| !s.is_empty()).map(PathBuf::from).collect();
