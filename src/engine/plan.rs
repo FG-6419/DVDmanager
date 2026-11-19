@@ -604,6 +604,94 @@ pub fn reauthor_play_cells(disc: &Disc, entry: &ReauthorEntry) -> Vec<(usize, us
     out
 }
 
+/// Warum sich Einträge nicht zu einem zusammenführen lassen.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MergeProblem {
+    TooFew,
+    /// Aus verschiedenen Titeln der DVD
+    DifferentTitles,
+    /// Zwischen zwei Einträgen fehlt ein Stück (Stelle im Titel, ms)
+    Gap(u64),
+    /// Zwei Einträge überschneiden sich (Stelle im Titel, ms)
+    Overlap(u64),
+}
+
+/// So weit (1 s) dürfen Schnittkanten auseinander liegen und gelten trotzdem als lückenlos
+/// (Schnitte am Schlüsselbild).
+const MERGE_TOLERANCE_MS: u64 = 1_000;
+
+/// Führt Einträge desselben Titels, die lückenlos aneinander anschließen (etwa nach
+/// „An Kapiteln teilen“), wieder zu einem Eintrag zusammen. Reihenfolge in der Liste egal;
+/// es zählt die Lage im Titel. Einstellungen und Einblende vom ersten, Ausblende vom
+/// letzten Teil. Die Nahtstellen werden Kapitelmarken, außer sie fallen ohnehin auf
+/// Kapitel der DVD und kein Teil hatte eigene Marken.
+pub fn merge_entries(disc: &Disc, parts: &[ReauthorEntry]) -> Result<ReauthorEntry, MergeProblem> {
+    if parts.len() < 2 {
+        return Err(MergeProblem::TooFew);
+    }
+    let title = parts[0].title;
+    if parts.iter().any(|p| p.title != title) {
+        return Err(MergeProblem::DifferentTitles);
+    }
+    let Some(t) = disc.titles.get(title) else { return Err(MergeProblem::DifferentTitles) };
+    let chapter_start = |c: usize| t.chapters.get(c).map(|c| c.start_ms).unwrap_or(0);
+    // Lage jedes Teils im ganzen Titel (ms)
+    let mut spans: Vec<(u64, u64, &ReauthorEntry)> = parts
+        .iter()
+        .map(|p| {
+            let total = entry_duration_ms(disc, p);
+            let (a, b) = p.cut.effective(total);
+            let base = chapter_start(p.first_chapter);
+            (base + a, base + b.min(total), p)
+        })
+        .collect();
+    spans.sort_by_key(|s| s.0);
+    for w in spans.windows(2) {
+        let (end, next) = (w[0].1, w[1].0);
+        if next > end + MERGE_TOLERANCE_MS {
+            return Err(MergeProblem::Gap(end));
+        }
+        if end > next + MERGE_TOLERANCE_MS {
+            return Err(MergeProblem::Overlap(next));
+        }
+    }
+    let (first, last) = (spans[0].2, spans[spans.len() - 1].2);
+    let first_chapter = parts.iter().map(|p| p.first_chapter).min().unwrap_or(0);
+    let last_chapter = parts.iter().map(|p| p.last_chapter).max().unwrap_or(0);
+    let base = chapter_start(first_chapter);
+    let mut m = ReauthorEntry::new(title, first_chapter, last_chapter, first.settings.clone());
+    let exact = parts.iter().any(|p| p.cut.exact);
+    m.cut = Cut { start_ms: Some(spans[0].0 - base), end_ms: Some(spans[spans.len() - 1].1 - base), exact };
+    m.fade = first.fade;
+    m.fade.fade_out = last.fade.fade_out;
+    // „Name – Teil 2“ wird wieder „Name“
+    m.name = first.name.as_ref().map(|n| {
+        n.rsplit_once(" – ")
+            .filter(|(_, tail)| {
+                let num = tail.strip_prefix("Teil ").or_else(|| tail.strip_prefix("part "));
+                num.is_some_and(|d| !d.is_empty() && d.chars().all(|c| c.is_ascii_digit()))
+            })
+            .map(|(head, _)| head.to_string())
+            .unwrap_or_else(|| n.clone())
+    });
+    // Kapitelmarken: Nahtstellen und die Marken der Teile, auf der neuen Zeitachse
+    let seams: Vec<u64> = spans.iter().skip(1).map(|s| s.0 - base).collect();
+    let dvd = m.original_marks(disc);
+    let near = |x: u64, list: &[u64]| list.iter().any(|d| d.abs_diff(x) <= MERGE_TOLERANCE_MS);
+    let all_dvd = parts.iter().all(|p| p.chapter_marks.is_none());
+    if !(all_dvd && seams.iter().all(|s| near(*s, &dvd))) {
+        let mut marks = seams;
+        for (a, b, p) in &spans {
+            let own = p.chapter_marks.clone().unwrap_or_else(|| p.original_marks(disc));
+            let pbase = chapter_start(p.first_chapter);
+            marks.extend(own.into_iter().map(|x| pbase + x).filter(|x| x > a && x < b).map(|x| x - base));
+        }
+        ReauthorEntry::normalize_marks(&mut marks);
+        m.chapter_marks = Some(marks);
+    }
+    Ok(m)
+}
+
 /// Dauer eines Eintrags vor dem Schnitt (ohne zusätzliche Kamerawinkel).
 pub fn entry_duration_ms(disc: &Disc, entry: &ReauthorEntry) -> u64 {
     let Some(t) = disc.titles.get(entry.title) else { return 0 };

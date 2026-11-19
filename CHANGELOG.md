@@ -2,6 +2,10 @@
 
 Jede Version zählt die letzte Stelle hoch. Neueste Version oben.
 
+## 1.0.052 · 2026-11-19 11:57
+
+- Einträge zusammenführen: Mehrere Einträge in „Neue DVD“ markieren (Strg- oder Umschalt-Klick), Rechtsklick, „… zu einem zusammenführen“. Das geht für Teile desselben Titels, die lückenlos aneinander anschließen, etwa nach „An Kapiteln in Einträge teilen“ oder bei einzeln hinzugefügten Kapiteln; die Reihenfolge in der Liste spielt keine Rolle. Der neue Eintrag steht an der Stelle des ersten markierten, übernimmt dessen Einstellungen und Einblende, die Ausblende des letzten Teils und den Namen ohne „– Teil n“. Die Nahtstellen werden Kapitelmarken (liegen sie auf Kapiteln der DVD, bleiben einfach deren Kapitel). Strg+Z holt die Teile zurück. Bei verschiedenen Titeln oder einer Lücke bleibt der Menüpunkt grau und nennt den Grund.
+
 ## 1.0.051 · 2026-11-19 11:11
 
 - MKV mit allen Spuren: Der MKV-Export übernimmt jetzt alle in den Einträgen angehakten Tonspuren und die DVD-Untertitel (als VobSub, mit Bildgröße und Farbpalette der DVD), jeweils mit Sprache und Namen („Deutsch“, „Englisch“). Die erste Tonspur ist voreingestellt, Untertitel sind zuschaltbar. Die Auswahl einer einzelnen Tonspur gibt es nur noch bei MPEG-2.

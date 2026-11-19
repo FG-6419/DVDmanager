@@ -479,6 +479,7 @@ impl App {
         let mut swap = None;
         let mut dup = None;
         let mut split = None;
+        let mut merge: Option<Vec<usize>> = None;
         let mut listen = None;
         let mut undo = false;
         ScrollArea::vertical().id_salt("neu").max_height(new_h).auto_shrink([false, false]).show(ui, |ui| {
@@ -562,6 +563,22 @@ impl App {
                     }
                     // Gehört der Eintrag zur Mehrfachauswahl, gilt Entfernen für alle markierten.
                     let group = self.marked.len() > 1 && self.marked.contains(&i);
+                    if group {
+                        // Markierte Teile desselben Titels wieder zu einem Eintrag machen
+                        let mut chosen: Vec<usize> = self.marked.iter().copied().filter(|k| *k < n).collect();
+                        chosen.sort_unstable();
+                        let parts: Vec<ReauthorEntry> = chosen.iter().map(|k| self.plan.reauthor[*k].clone()).collect();
+                        let check = discslim::engine::plan::merge_entries(disc, &parts);
+                        let label = trf!("{}  {} zu einem zusammenführen", "{}  Merge {} into one", ic::INTERSECT, discslim::i18n::count(chosen.len(), "Eintrag", "Einträge", "entry", "entries"));
+                        let tip = match &check {
+                            Ok(_) => tr!("Macht aus den markierten Teilen wieder einen Eintrag; die Nahtstellen werden Kapitel. Strg+Z macht es rückgängig.", "Turns the marked parts back into one entry; the seams become chapters. Ctrl+Z undoes it.").to_string(),
+                            Err(e) => merge_problem_text(e),
+                        };
+                        if ui.add_enabled(check.is_ok(), egui::Button::new(label)).on_hover_text(&tip).on_disabled_hover_text(&tip).clicked() {
+                            merge = Some(chosen);
+                            ui.close();
+                        }
+                    }
                     let label = if group {
                         trf!("{}  {} entfernen", "{}  Remove {}", ic::TRASH, discslim::i18n::count(self.marked.len(), "Eintrag", "Einträge", "entry", "entries"))
                     } else {
@@ -632,6 +649,9 @@ impl App {
         }
         if split.is_some() || dup.is_some() || swap.is_some() || remove.is_some() || undo {
             self.rename = None;
+        }
+        if let Some(idx) = merge {
+            self.merge_selected(disc, idx);
         }
         if let Some(i) = split {
             let n = self.split_at_chapters(disc, i);
@@ -965,6 +985,7 @@ impl App {
         removed.reverse();
         let n = removed.len();
         self.undo_remove = Some(removed);
+        self.undo_merge_at = None;
         self.marked.clear();
         self.mark_anchor = None;
         self.sel = if self.plan.reauthor.is_empty() { Selection::None } else { Selection::Entry(first.min(self.plan.reauthor.len() - 1)) };
@@ -978,6 +999,11 @@ impl App {
     /// Holt die zuletzt entfernten Einträge an ihre alte Stelle zurück.
     pub(super) fn undo_last_remove(&mut self) {
         let Some(removed) = self.undo_remove.take() else { return };
+        // Nach dem Zusammenführen: erst den zusammengeführten Eintrag entfernen
+        let merged = self.undo_merge_at.take();
+        if let Some(at) = merged.filter(|at| *at < self.plan.reauthor.len()) {
+            self.plan.reauthor.remove(at);
+        }
         self.marked.clear();
         self.mark_anchor = None;
         let mut first = None;
@@ -996,8 +1022,43 @@ impl App {
             self.sel = Selection::Entry(f);
         }
         self.preview.dirty = true;
+        let text = if merged.is_some() {
+            trf!("Zusammenführen rückgängig: {} wieder da", "Merge undone: {} back", discslim::i18n::count(n, "Eintrag", "Einträge", "entry", "entries"))
+        } else {
+            trf!("{} wiederhergestellt", "{} restored", discslim::i18n::count(n, "Eintrag", "Einträge", "entry", "entries"))
+        };
+        self.notice = Some((text, std::time::Instant::now()));
+    }
+
+    /// Führt die Einträge `idx` zu einem zusammen (an der Stelle des ersten in der Liste).
+    /// Strg+Z holt die Teile zurück.
+    pub(super) fn merge_selected(&mut self, disc: &Disc, mut idx: Vec<usize>) {
+        idx.sort_unstable();
+        idx.dedup();
+        idx.retain(|i| *i < self.plan.reauthor.len());
+        let parts: Vec<ReauthorEntry> = idx.iter().map(|i| self.plan.reauthor[*i].clone()).collect();
+        let merged = match discslim::engine::plan::merge_entries(disc, &parts) {
+            Ok(m) => m,
+            Err(e) => {
+                self.error = Some(merge_problem_text(&e));
+                return;
+            }
+        };
+        let at = idx[0];
+        let removed: Vec<(usize, ReauthorEntry)> = idx.iter().map(|i| (*i, self.plan.reauthor[*i].clone())).collect();
+        for &i in idx.iter().rev() {
+            self.plan.reauthor.remove(i);
+        }
+        self.plan.reauthor.insert(at, merged);
+        self.undo_remove = Some(removed);
+        self.undo_merge_at = Some(at);
+        self.marked.clear();
+        self.mark_anchor = None;
+        self.rename = None;
+        self.sel = Selection::Entry(at);
+        self.preview.dirty = true;
         self.notice = Some((
-            trf!("{} wiederhergestellt", "{} restored", discslim::i18n::count(n, "Eintrag", "Einträge", "entry", "entries")),
+            trf!("{} zu einem zusammengeführt · Strg+Z macht es rückgängig", "{} merged into one · Ctrl+Z undoes it", discslim::i18n::count(idx.len(), "Eintrag", "Einträge", "entry", "entries")),
             std::time::Instant::now(),
         ));
     }
@@ -1923,4 +1984,26 @@ pub(super) fn entry_info(disc: &Disc, i: usize, e: &ReauthorEntry) -> Option<(St
         None => trf!("{}. Titel {}", "{}. Title {}", i + 1, t.number),
     };
     Some((name, chapters, fmt_size(size)))
+}
+/// Warum sich Einträge nicht zusammenführen lassen, für Hinweis und Meldung.
+fn merge_problem_text(e: &discslim::engine::plan::MergeProblem) -> String {
+    use discslim::engine::plan::MergeProblem as M;
+    match e {
+        M::TooFew => tr!("Markiere mindestens zwei Einträge (Strg- oder Umschalt-Klick).", "Mark at least two entries (Ctrl or Shift click).").to_string(),
+        M::DifferentTitles => tr!(
+            "Zusammenführen geht nur bei Teilen desselben Titels, z. B. nach „An Kapiteln in Einträge teilen“. Diese Einträge stammen aus verschiedenen Titeln.",
+            "Merging only works for parts of the same title, e.g. after \"Split into entries at chapters\". These entries come from different titles."
+        )
+        .to_string(),
+        M::Gap(ms) => trf!(
+            "Zwischen den Teilen fehlt ein Stück (bei {} im Titel). Zusammenführen geht nur bei lückenlos aneinander anschließenden Teilen.",
+            "A piece is missing between the parts (at {} in the title). Merging only works for parts that join without a gap.",
+            fmt_time(*ms)
+        ),
+        M::Overlap(ms) => trf!(
+            "Die Teile überschneiden sich (bei {} im Titel).",
+            "The parts overlap (at {} in the title).",
+            fmt_time(*ms)
+        ),
+    }
 }

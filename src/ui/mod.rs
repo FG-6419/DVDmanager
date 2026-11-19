@@ -273,6 +273,9 @@ pub struct App {
     mark_anchor: Option<usize>,
     /// Zuletzt entfernte Einträge mit ihrer Stelle, für „Rückgängig“
     undo_remove: Option<Vec<(usize, discslim::engine::plan::ReauthorEntry)>>,
+    /// Das Rückgängig gilt einem Zusammenführen: Stelle des zusammengeführten Eintrags,
+    /// der vor dem Zurückholen der Teile entfernt wird.
+    undo_merge_at: Option<usize>,
     /// Eintrag der Liste „Neue DVD“, der gerade umbenannt wird: Index, Text, Fokus schon gesetzt
     rename: Option<(usize, String, bool)>,
     /// Vorschaubilder der Einträge und die Schleife unter der Maus
@@ -476,6 +479,7 @@ impl App {
             marked: Default::default(),
             mark_anchor: None,
             undo_remove: None,
+            undo_merge_at: None,
             rename: None,
             thumbs: Some(thumbs::Thumbs::new(cc.egui_ctx.clone())),
             hover_loop: None,
@@ -834,6 +838,7 @@ impl App {
         self.marked.clear();
         self.mark_anchor = None;
         self.undo_remove = None;
+        self.undo_merge_at = None;
         // Neue DVD: alte Vorschaubilder gelten nicht mehr.
         if let Some(t) = self.thumbs.as_mut() {
             t.clear();
@@ -1114,6 +1119,32 @@ impl App {
                     d.template = "Serie S01E{Nr} - {Name}".into();
                     d.start_nr = 9;
                 }
+            }
+            ("merge", 5) => {
+                // Hauptfilm an Kapiteln teilen, alles markieren, zusammenführen, rückgängig, wieder
+                // zusammenführen; Stände ins Protokoll
+                self.plan.mode = Mode::Reauthor;
+                let mut log = String::new();
+                if let Some(d) = self.disc.clone() {
+                    let ti = (0..d.titles.len()).max_by_key(|k| d.titles[*k].ms).unwrap_or(0);
+                    let t = &d.titles[ti];
+                    let mut e = discslim::engine::plan::ReauthorEntry::new(ti, 0, t.chapters.len().saturating_sub(1), Default::default());
+                    let total = discslim::engine::plan::entry_duration_ms(&d, &e);
+                    e.cut = discslim::engine::plan::Cut::whole(total, true);
+                    e.name = Some("Film".into());
+                    self.plan.reauthor.push(e);
+                    let n = self.split_at_chapters(&d, 0);
+                    log += &format!("geteilt in {n}: {}\n", self.plan.reauthor.len());
+                    let all: Vec<usize> = (0..self.plan.reauthor.len()).collect();
+                    self.marked = all.iter().copied().collect();
+                    self.merge_selected(&d, all.clone());
+                    log += &format!("zusammengeführt: {} Einträge, Name {:?}, Marken {:?}\n", self.plan.reauthor.len(), self.plan.reauthor[0].name, self.plan.reauthor[0].chapter_marks);
+                    self.undo_last_remove();
+                    log += &format!("rückgängig: {} Einträge\n", self.plan.reauthor.len());
+                    self.merge_selected(&d, all);
+                    log += &format!("wieder zusammengeführt: {}\n", self.plan.reauthor.len());
+                }
+                let _ = std::fs::write(std::env::var("DISCSLIM_DEV_LOG").unwrap_or_else(|_| "devlog.txt".into()), log);
             }
             ("filecheck", 5) => {
                 // „Datei prüfen“ mit den Dateien aus DISCSLIM_CHECK (durch | getrennt)

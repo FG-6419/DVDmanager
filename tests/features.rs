@@ -1329,3 +1329,84 @@ fn batch_queue_runs_all() {
     q.clear_finished();
     assert_eq!(q.items().len(), 2);
 }
+
+/// Zusammenführen: Teile desselben Titels werden wieder ein Eintrag; Lücken und fremde
+/// Titel werden abgelehnt.
+#[test]
+fn merge_parts_back_into_one() {
+    use discslim::engine::plan::{merge_entries, MergeProblem};
+    let w = work("zusammen");
+    let src = demo::build_sample(&w, |_| {}).unwrap();
+    let disc = open_analysed(&src);
+    let ti = longest_title(&disc);
+    let t = &disc.titles[ti];
+    let last = t.chapters.len() - 1;
+    assert!(last >= 2, "Beispiel braucht mehrere Kapitel");
+    let whole = ReauthorEntry::new(ti, 0, last, ItemSettings::default());
+    let total = entry_duration_ms(&disc, &whole);
+    let starts: Vec<u64> = t.chapters.iter().map(|c| c.start_ms).collect();
+
+    // 1) Wie „An Kapiteln teilen“: gleicher Kapitelbereich, Schnitte an den Kapitelgrenzen
+    let mut bounds = vec![1_000];
+    bounds.extend(starts[1..].iter().copied());
+    bounds.push(total - 1_000);
+    let mut parts: Vec<ReauthorEntry> = bounds
+        .windows(2)
+        .enumerate()
+        .map(|(k, b)| {
+            let mut p = whole.clone();
+            p.cut = Cut { start_ms: Some(b[0]), end_ms: Some(b[1]), exact: true };
+            p.name = Some(format!("Film – Teil {}", k + 1));
+            p
+        })
+        .collect();
+    parts.reverse(); // Reihenfolge in der Liste spielt keine Rolle
+    let m = merge_entries(&disc, &parts).unwrap();
+    assert_eq!((m.first_chapter, m.last_chapter), (0, last));
+    assert_eq!((m.cut.start_ms, m.cut.end_ms), (Some(1_000), Some(total - 1_000)));
+    assert_eq!(m.name.as_deref(), Some("Film"));
+    assert!(m.chapter_marks.is_none(), "Nahtstellen auf DVD-Kapiteln: Kapitel der DVD bleiben");
+
+    // 2) Einzelne Kapitel als Einträge (eigene Zeitachse je Kapitel)
+    let per_chapter: Vec<ReauthorEntry> = (0..=last)
+        .map(|c| {
+            let mut e = ReauthorEntry::new(ti, c, c, ItemSettings::default());
+            let d = entry_duration_ms(&disc, &e);
+            e.cut = Cut::whole(d, false);
+            e
+        })
+        .collect();
+    let m = merge_entries(&disc, &per_chapter).unwrap();
+    assert_eq!((m.first_chapter, m.last_chapter), (0, last));
+    assert!(m.cut.start_ms.unwrap() < 100 && m.cut.end_ms.unwrap() + 1_000 > total, "{:?}", m.cut);
+
+    // 3) Mittlerer Teil fehlt: Lücke
+    let gap = vec![per_chapter[0].clone(), per_chapter[2].clone()];
+    assert!(matches!(merge_entries(&disc, &gap), Err(MergeProblem::Gap(_))));
+
+    // 4) Eigene Marken bleiben, die Naht wird eine Marke
+    let mut a = whole.clone();
+    a.cut = Cut { start_ms: Some(0), end_ms: Some(total / 2), exact: true };
+    a.chapter_marks = Some(vec![total / 4]);
+    let mut b = whole.clone();
+    b.cut = Cut { start_ms: Some(total / 2), end_ms: Some(total), exact: true };
+    let m = merge_entries(&disc, &[a, b]).unwrap();
+    let marks = m.chapter_marks.unwrap();
+    assert!(marks.iter().any(|x| x.abs_diff(total / 4) < 50) && marks.iter().any(|x| x.abs_diff(total / 2) < 50), "{marks:?}");
+
+    // 5) Verschiedene Titel
+    let other = (0..disc.titles.len()).find(|k| *k != ti).unwrap();
+    let mut o = ReauthorEntry::new(other, 0, 0, ItemSettings::default());
+    o.cut = Cut::whole(entry_duration_ms(&disc, &o), false);
+    assert_eq!(merge_entries(&disc, &[per_chapter[0].clone(), o]).unwrap_err(), MergeProblem::DifferentTitles);
+
+    // Das zusammengeführte Stück lässt sich ausgeben und ist so lang wie die Teile zusammen
+    let mut plan = Plan::new(NO_TARGET);
+    plan.mode = Mode::Reauthor;
+    plan.reauthor.push(merge_entries(&disc, &parts).unwrap());
+    let s = run_backup(open_analysed(&src), plan, Output::Mpeg { path: w.join("ganz.mpg"), audio: None });
+    let check = s.check.unwrap();
+    assert!(check.is_clean(), "{check:?}");
+    let want = (total - 2_000) as f64 / 1000.0;
+    assert!((check.seconds - want).abs() < 1.0, "Länge {} statt {want}", check.seconds);
+}
